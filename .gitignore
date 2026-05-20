@@ -1,0 +1,18 @@
+# Binaries
+/vimpin
+/dist/
+
+# Go
+*.exe
+*.test
+*.out
+coverage.txt
+vendor/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
