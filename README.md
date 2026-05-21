@@ -95,33 +95,22 @@ Overriding a LazyVim plugin is a power tool. Use `layer = "override"` only when 
 
 ## Renovate
 
-A companion preset is planned at `gr1m0h/vimpin-renovate-config`. For now, drop this into `renovate.json`:
+The companion preset [`gr1m0h/vimpin-renovate-config`](https://github.com/gr1m0h/vimpin-renovate-config) ships ready-to-use custom managers. Add it to your dotfiles' `renovate.json`:
 
 ```json
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "customManagers": [
-    {
-      "customType": "regex",
-      "managerFilePatterns": ["vimpin\\.toml$"],
-      "matchStrings": [
-        "repo\\s*=\\s*\"(?<depName>[^\"]+)\"\\s*\\ncommit\\s*=\\s*\"(?<currentDigest>[a-f0-9]+)\"\\s*\\ntag\\s*=\\s*\"(?<currentValue>[^\"]+)\""
-      ],
-      "datasourceTemplate": "github-tags",
-      "packageNameTemplate": "{{depName}}"
-    },
-    {
-      "customType": "regex",
-      "managerFilePatterns": ["vimpin\\.toml$"],
-      "matchStrings": [
-        "repo\\s*=\\s*\"(?<depName>[^\"]+)\"\\s*\\ncommit\\s*=\\s*\"(?<currentDigest>[a-f0-9]+)\"\\s*\\nbranch\\s*=\\s*\"(?<currentValue>[^\"]+)\""
-      ],
-      "datasourceTemplate": "git-refs",
-      "packageNameTemplate": "https://github.com/{{depName}}"
-    }
-  ]
+  "extends": ["github>gr1m0h/vimpin-renovate-config"]
 }
 ```
+
+That bundles managers for `vimpin.toml`, hand-pinned lazy.nvim / packer.nvim Lua specs, vim-plug specs, and (with the bundled bootstrap helper) `lazy-lock.json`. If you only want the vimpin manager:
+
+```json
+{ "extends": ["github>gr1m0h/vimpin-renovate-config:vimpin"] }
+```
+
+See the preset's README for the full list of sub-presets and known limits.
 
 ## Non-goals
 
