@@ -1,12 +1,17 @@
 # vimpin
 
-A pinact-style commit pinner for Vim/Neovim plugin managers.
+Pin Vim/Neovim plugin specs to explicit commit hashes, and let Renovate
+drive the updates.
 
 `vimpin` rewrites your existing plugin spec files to pin every plugin to an
 explicit commit hash, inline, while keeping a human-readable annotation of
 the original tag or branch. It pairs with [Renovate](https://docs.renovatebot.com/)
 through a ready-made preset so commit bumps land as reviewable pull requests
 instead of silent `:Lazy update` calls.
+
+The approach mirrors the commit-pinning pattern that has become standard
+for GitHub Actions workflows (e.g. [`pinact`](https://github.com/suzuki-shunsuke/pinact)),
+applied to the Lua spec files that Neovim plugin managers consume.
 
 > **Status:** alpha, used by author. The CLI surface is small (`run`,
 > `verify`) and unlikely to change incompatibly; the supported Lua spec
@@ -225,9 +230,10 @@ Not compliant (Renovate will skip):
 { "owner/repo", event = "VeryLazy", commit = "..." }, -- tag: v1.0
 ```
 
-This is the same trade-off [pinact](https://github.com/suzuki-shunsuke/pinact)
-makes for GitHub Actions YAML. The structural simplicity buys predictable
-Renovate behaviour.
+The trade-off is intentional: a fixed field order is what makes a single
+regex-based Renovate manager work reliably. Loosening the layout would
+require a Lua parser inside Renovate itself, which is not something the
+custom-manager interface supports today.
 
 ## Roadmap
 
