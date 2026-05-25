@@ -1,208 +1,159 @@
 # vimpin
 
-A universal version pinner for Vim/Neovim plugins.
+A pinact-style commit pinner for Vim/Neovim plugin managers.
 
-`vimpin` is to Vim/Neovim plugins what [pinact](https://github.com/suzuki-shunsuke/pinact) is to GitHub Actions: it pins every plugin to an explicit commit hash via a TOML manifest, and integrates with [Renovate](https://docs.renovatebot.com/) so updates flow through reviewable pull requests instead of silent `:Lazy update` calls.
+`vimpin` rewrites your existing plugin spec files to pin every plugin to an
+explicit commit hash, inline, while keeping a human-readable annotation of
+the original tag or branch. It pairs with [Renovate](https://docs.renovatebot.com/)
+through a ready-made preset so commit bumps land as reviewable pull requests
+instead of silent `:Lazy update` calls.
 
-> **Status:** alpha, used by author. Schema may change.
+> **Status:** alpha, used by author. The CLI surface is small (`run`,
+> `verify`) and unlikely to change incompatibly; the supported Lua spec
+> shape may tighten as edge cases surface.
+
+> **Scope:** vimpin aims to support the major Vim/Neovim plugin managers
+> over time. **Currently only `lazy.nvim` Lua specs are supported.** packer.nvim,
+> vim-plug, and lockfile-only flows are tracked in the roadmap below.
 
 ## Why
 
-`lazy.nvim`'s lockfile only *records* the current commit — it does not *lock* it. `:Lazy update` will happily move every plugin to a new commit the moment you forget to pin specs explicitly. For supply-chain-conscious setups this is unacceptable.
+`lazy.nvim` happily honours `commit = "..."` in your spec, but most people
+never reach for that field because there is no good update story without
+external tooling. So plugins stay on a floating HEAD (`:Lazy update` moves
+them) or on a `tag = "..."` that lazy.nvim resolves at install time but does
+not lock — both of which leave the supply chain undefended.
 
-`vimpin` makes the pin the source of truth and reduces the lockfile to a derived artifact.
-
-### How vimpin compares
-
-| Tool / artifact                  | Locks?            | Source of truth       | Update flow                                |
-|----------------------------------|-------------------|-----------------------|--------------------------------------------|
-| `lazy-lock.json` (lazy.nvim)     | Records only      | Last `:Lazy sync`     | `:Lazy update` moves everything            |
-| `pinact` (GitHub Actions)        | Yes (commit pin)  | Workflow `.yml`       | Renovate PRs against the pinned hash       |
-| `vimpin` alone                   | Yes (commit pin)  | `vimpin.toml`         | `vimpin pin --refresh` or manual edit      |
-| `vimpin` + Renovate preset       | Yes (commit pin)  | `vimpin.toml`         | Renovate PRs against the pinned hash       |
+`vimpin` makes the *commit* the source of truth, written directly into the
+Lua spec, with the original tag/branch preserved as a comment for both
+humans and Renovate to read.
 
 ## Quickstart
 
 ```bash
-# Install (Go 1.24+)
 go install github.com/gr1m0h/vimpin/cmd/vimpin@latest
 
-# Write a manifest
-cat > vimpin.toml <<'TOML'
-schema = "https://vimpin.io/schema/v1"
+# Starting point: a normal lazy.nvim spec with a tag or branch hint
+cat > lua/plugins/example.lua <<'LUA'
+return {
+  { "ggandor/leap.nvim", tag = "v0.1.5" },
+  {
+    "folke/which-key.nvim",
+    branch = "main",
+    keys = { "<leader>" },
+  },
+}
+LUA
 
-[settings]
-default_host = "github.com"
-allow_hosts = ["github.com"]
+# Resolve every tag/branch to a commit and write it back inline
+vimpin run
 
-[[plugin]]
-repo = "ggandor/leap.nvim"
-tag = "v0.1.5"
-layer = "user"
-group = "core"
-TOML
+# Output: same file, now pinned and annotated
+cat lua/plugins/example.lua
+# return {
+#   { "ggandor/leap.nvim", commit = "8a40d3aa...07b9079b" }, -- tag: v0.1.5
+#   {
+#     "folke/which-key.nvim",
+#     commit = "3aab2147...0a44c15a", -- branch: main
+#     keys = { "<leader>" },
+#   },
+# }
 
-# Resolve the tag to a commit hash
-vimpin pin
-
-# Verify everything is locked
-vimpin verify --strict
-
-# Generate the lazy.nvim spec
-vimpin generate --adapter lazy --output lua/plugins/_generated.lua
+# Gate CI on every spec being pinned
+vimpin verify
 ```
 
-## Manifest schema
+(Commit hashes elided with `...` in this README. The on-disk value is the
+full 40-character hash that `git ls-remote` returns.)
 
-| Field      | Required | Description |
-|------------|----------|-------------|
-| `repo`     | yes      | `owner/name` on the host |
-| `commit`   | after pin | 40-char hex commit hash — the actual lock |
-| `tag`      | optional | Renovate update hint (tag tracking) |
-| `branch`   | optional | Renovate update hint (branch HEAD tracking) |
-| `host`     | optional | overrides `settings.default_host` |
-| `layer`    | optional | `user` (default) or `override` for distribution patches |
-| `group`    | optional | filter target for `vimpin generate --groups` |
-| `reason`   | optional | human comment, surfaced in adapter output |
+## Canonical form
 
-The `schema` field is currently validated by exact string match against
-`https://vimpin.io/schema/v1`. The URL is a stable identifier, not a live
-endpoint — vimpin does not fetch it. Schema bumps (`/v2`, …) will be
-gated by an explicit migration path before release.
+Every spec is rewritten into one of two shapes:
 
-### Settings
+**Form A** — single-line spec, comment trails the closing brace:
 
-```toml
-[settings]
-default_host = "github.com"        # host used when [[plugin]] omits "host"
-allow_hosts  = ["github.com"]      # whitelist; unknown hosts are rejected
+```lua
+{ "owner/repo", commit = "<40-hex>" }, -- tag: v0.1.5
 ```
 
-- `allow_hosts` is a **strict whitelist**. Any plugin whose effective host
-  is not present in the list fails validation (`pin`, `verify`, `generate`
-  all reject the manifest). If `allow_hosts` is omitted, `github.com` is
-  implicitly allowed and any other host is rejected.
-- There is no `deny_hosts` field; if you need exclusion semantics, invert
-  the question and shorten `allow_hosts`.
+**Form B** — multi-line spec, comment trails the commit field:
 
-### Resolution precedence
+```lua
+{
+  "owner/repo",
+  commit = "<40-hex>", -- branch: main
+  keys = { "x" },
+  config = function() end,
+}
+```
 
-`commit > tag > branch` across three axes:
+Two invariants hold across both forms:
 
-1. **Install**: whatever ref is highest-priority among those present is what gets checked out.
-2. **Renovate**: when both are present, tag tracking is preferred over branch HEAD tracking.
-3. **Add** (roadmap, see below): `vimpin add owner/repo` will default to tag if a release exists, else default branch.
+1. **`commit` is the only authoritative ref.** `lazy.nvim` uses it; `tag`/
+   `branch` Lua fields are removed by `vimpin run`.
+2. **The `-- tag:` / `-- branch:` annotation lives on the same line as the
+   commit value.** This is what both vimpin and Renovate read to know which
+   upstream ref to track. The annotation must follow the commit value on a
+   single line.
 
 ## Commands
 
 ```text
-vimpin pin                  Resolve tag/branch → commit, write back
-  --refresh                 Re-resolve entries that already have a commit
-                            (tag entries get re-pointed at the latest commit
-                             the tag currently resolves to; branch entries at
-                             the branch's current HEAD)
-vimpin verify               Confirm every entry is pinned to a 40-hex commit
-  --strict                  Also re-check tag/branch ↔ commit alignment by
-                            re-resolving each ref on the remote
-vimpin generate             Emit plugin-manager-specific spec
-  --adapter lazy            (default) lazy.nvim spec
-  --groups core,work        Filter by group
-  --output PATH             Write to file (default stdout)
+vimpin run [PATHS...]
+  Resolve tag/branch refs to commits and rewrite specs in canonical form.
+  With no PATHS, scans the LazyVim default layout: lua/plugins/, lua/config/lazy.lua,
+  init.lua, plugin/.
+
+  --refresh    Re-resolve commit values for already-pinned specs against the
+               current annotated ref (use after a quiet period to pick up
+               commits Renovate has not yet PR'd).
+  --check      Do not write; exit non-zero if any file would change (CI use).
+  --dry-run    Do not write; print the planned new file contents to stdout.
+
+vimpin verify [PATHS...]
+  Check that every spec has a 40-hex commit value and a -- tag: / -- branch:
+  annotation. Exit code is non-zero if any check fails.
+
+  --strict     Additionally re-resolve each ref against the remote and report
+               drift (commit no longer matches the annotated tag/branch).
 ```
 
-### Roadmap (not yet implemented)
+### `-- vimpin:ignore`
 
-- `vimpin add <owner/repo>` — interactive entry creation
-- `vimpin adopt / disown / status` — selective source-of-truth helpers for
-  LazyVim users (see [LazyVim integration](#lazyvim-integration))
+Append `-- vimpin:ignore` to a spec to opt it out of `vimpin run` and
+`vimpin verify`:
+
+```lua
+{ "internal/dev-plugin", dir = "~/code/plugin" }, -- vimpin:ignore
+```
+
+This is the supported escape hatch for local plugins, plugins you do not
+want managed, or temporary experiments.
 
 ## Authentication and rate limits
 
-vimpin shells out to `git ls-remote` to resolve tags and branches; it does
-**not** call the GitHub REST API. This has two practical implications:
+vimpin shells out to `git ls-remote` to resolve tags and branches — it does
+**not** call the GitHub REST API. Two consequences:
 
 - **Authentication piggybacks on local git.** Private repos resolve through
-  whatever credential helper your shell has configured (`git credential`,
-  `gh auth setup-git`, SSH keys, etc.). vimpin sets
-  `GIT_TERMINAL_PROMPT=0` so missing credentials fail fast rather than
-  hanging on a password prompt.
-- **The 60 req/h unauthenticated REST limit does not apply.** GitHub's
-  git protocol endpoints are not subject to the REST rate limit, so even
-  several hundred plugins resolve without a token. If you do hit a wall
-  it will be from `git` itself (timeouts, host-level abuse limits), not
-  the REST quota.
+  whichever credential helper your shell has configured (`git credential`,
+  `gh auth setup-git`, SSH keys, etc.). vimpin sets `GIT_TERMINAL_PROMPT=0`
+  so missing credentials fail fast rather than hanging on a password prompt.
+- **The 60 req/h unauthenticated REST limit does not apply.** GitHub's git
+  protocol endpoints are not subject to that quota, so even several hundred
+  plugins resolve without a token.
 
-If you mirror plugins on another host (`gitlab.com`, `git.sr.ht`, internal
-gitea, etc.) add it to `settings.allow_hosts` and ensure the relevant
-git remote credentials are reachable from where you run `vimpin`.
+Hosts other than `github.com` are not yet supported in the CLI: vimpin
+constructs `https://github.com/<owner>/<repo>` from each spec's positional
+string. Mirroring via local `git config` aliases works as a workaround;
+first-class multi-host support is on the roadmap.
 
-## LazyVim integration
+## Renovate integration
 
-LazyVim does not pin its bundled plugins by default
-([`version = false`](https://www.lazyvim.org/configuration/lazy.nvim) is
-the recommended setting). `lazy-lock.json` records *which* commits are
-currently installed, but it does not *enforce* them — `:Lazy update` will
-move them on the next sync.
-
-For supply-chain-conscious users on LazyVim:
-
-- **distribution layer**: pin LazyVim itself with `version = "^14"` (major
-  lock) or a commit hash.
-- **vimpin layer**: opt in plugins individually with `layer = "override"`
-  for LazyVim-managed plugins, or `layer = "user"` for plugins you brought.
-
-`layer = "override"` is **the primary mechanism vimpin offers to LazyVim
-users**, not a last-resort escape hatch. It is the normal way to make a
-LazyVim-bundled plugin reproducible.
-
-### Selective Source of Truth (recommended model)
-
-The realistic operating model for a LazyVim user is not "pin every plugin"
-but "bring critical plugins under vimpin's jurisdiction and leave the
-rest to LazyVim":
-
-| Plugin state                                 | Jurisdiction | Source of truth         |
-|----------------------------------------------|--------------|-------------------------|
-| Entry exists in `vimpin.toml`                | **vimpin**   | `commit` in the manifest |
-| No entry in `vimpin.toml`                    | **LazyVim**  | `lazy-lock.json`        |
-
-Start with 5–10 entries (treesitter, LSP, completion, anything you've
-been bitten by) and grow only when needed. The `vimpin adopt/disown/status`
-roadmap commands will formalise this workflow; until then, edit
-`vimpin.toml` directly and run `vimpin pin` to fill in commits.
-
-In `lua/config/lazy.lua`:
-
-```lua
-require("lazy").setup({
-  { "LazyVim/LazyVim", import = "lazyvim.plugins", version = "v14.0.0" },
-  { import = "plugins._generated" },
-})
-```
-
-When you override a LazyVim-managed plugin, the pinned commit must remain
-compatible with the LazyVim version in use; pinning to a commit that
-predates an API LazyVim depends on will break the distribution layer.
-
-## Generated specs (`_generated.lua`)
-
-`vimpin generate` is intended to be **deterministic and reviewable**. The
-recommended workflow is:
-
-1. Edit `vimpin.toml`.
-2. Run `vimpin pin` (fills in commits).
-3. Run `vimpin generate --adapter lazy --output lua/plugins/_generated.lua`.
-4. **Commit both files** together.
-5. In CI, regenerate and `git diff --exit-code` to catch drift.
-
-Treating `_generated.lua` as a build artifact in `.gitignore` is supported,
-but it shifts the contract: every machine that runs Neovim needs to run
-`vimpin generate` first. Committing the file is simpler and gives diff
-review of every commit change.
-
-## Renovate
-
-The companion preset [`gr1m0h/vimpin-renovate-config`](https://github.com/gr1m0h/vimpin-renovate-config) ships ready-to-use custom managers. Add it to your dotfiles' `renovate.json`:
+The companion preset
+[`gr1m0h/vimpin-renovate-config`](https://github.com/gr1m0h/vimpin-renovate-config)
+ships ready-to-use custom managers for the canonical form above. Add it to
+your repo's `renovate.json`:
 
 ```json
 {
@@ -211,32 +162,110 @@ The companion preset [`gr1m0h/vimpin-renovate-config`](https://github.com/gr1m0h
 }
 ```
 
-That bundles managers for `vimpin.toml`, hand-pinned lazy.nvim / packer.nvim Lua specs, vim-plug specs, and (with the bundled bootstrap helper) `lazy-lock.json`. If you only want the vimpin manager:
+Renovate then opens a PR each time the annotated tag or branch moves,
+updating both the commit hash and the annotation comment atomically. Because
+both halves change in the same PR, drift between them is structurally
+impossible while Renovate is the sole updater.
 
-```json
-{ "extends": ["github>gr1m0h/vimpin-renovate-config:vimpin"] }
+See the preset's README for the layout constraints, recommended companion
+config (`dependencyDashboard`, `prConcurrentLimit`, `schedule`), and known
+limits.
+
+## GitHub Actions
+
+Run `vimpin run --check` on every PR and let CI block merges that
+introduce unpinned specs. Example workflow:
+
+```yaml
+name: vimpin
+on:
+  pull_request:
+    paths:
+      - 'lua/**/*.lua'
+      - 'init.lua'
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - run: go install github.com/gr1m0h/vimpin/cmd/vimpin@latest
+      - run: vimpin run --check
+      - run: vimpin verify --strict
 ```
 
-See the preset's README for the full list of sub-presets, recommended
-companion config (`dependencyDashboard`, `prConcurrentLimit`,
-`schedule`), and known limits.
+A second workflow can run `vimpin run` on a schedule (or via
+`workflow_dispatch`) and open a PR with the resulting changes; pair with
+Renovate's `dependencyDashboard` so all pin movements stay reviewable.
+
+## Field-order constraint
+
+For the bundled Renovate preset to recognise a spec, `commit` must be the
+**first named field after the positional repo string**. vimpin emits this
+layout by construction, so a regular `vimpin run` → commit cycle never
+violates the constraint. Manual edits that move `commit` past other fields
+(`event`, `keys`, `opts`, etc.) will be silently ignored by Renovate.
+
+Compliant:
+
+```lua
+{ "owner/repo", commit = "...", event = "VeryLazy" }, -- tag: v1.0
+{
+  "owner/repo",
+  commit = "...", -- tag: v1.0
+  event = "VeryLazy",
+}
+```
+
+Not compliant (Renovate will skip):
+
+```lua
+{ "owner/repo", event = "VeryLazy", commit = "..." }, -- tag: v1.0
+```
+
+This is the same trade-off [pinact](https://github.com/suzuki-shunsuke/pinact)
+makes for GitHub Actions YAML. The structural simplicity buys predictable
+Renovate behaviour.
+
+## Roadmap
+
+- **`vimpin add <owner/repo>`** — interactive spec creation that fetches
+  the latest release tag (or default branch) and writes a canonical entry.
+- **packer.nvim adapter** — apply the same pattern to packer specs.
+- **vim-plug adapter** — apply the same pattern to vim-plug.
+- **Multi-host clone URLs** — first-class `gitlab.com`, `git.sr.ht`, and
+  custom-host support so non-github specs do not require a git URL rewrite.
+- **Semver `version = "..."` resolution** — parse `version = "^0.1"` style
+  ranges, pick the highest matching tag on the remote, and pin to its
+  commit.
+- **Sigstore-style provenance** — verify commit signatures during `verify
+  --strict` (today vimpin trusts the remote response from `git ls-remote`).
+
+## Comparison
+
+| Tool / artifact                  | Locks?            | Source of truth       | Update flow                                |
+|----------------------------------|-------------------|-----------------------|--------------------------------------------|
+| `lazy-lock.json` (lazy.nvim)     | Records only      | Last `:Lazy sync`     | `:Lazy update` moves everything            |
+| Hand-written `commit = "..."`    | Yes (commit pin)  | Lua spec              | Nothing automated; manual edits            |
+| `pinact` (GitHub Actions)        | Yes (commit pin)  | Workflow `.yml`       | Renovate PRs against the pinned hash       |
+| `vimpin` + Renovate preset       | Yes (commit pin)  | Lua spec              | Renovate PRs against the pinned hash       |
 
 ## Testing
 
-`vimpin` is tested with `go test ./...`. The current focus is the
-`internal/manifest`, `internal/resolver`, and `internal/adapter/lazy`
-packages (parser, validator, golden-file adapter output). Promotion from
-alpha to beta will require an explicit coverage floor (targeting ~75%)
-and an `internal/resolver` test suite that exercises tag/branch resolution
-against an `httptest`-backed git fixture.
-
-Contributions to broaden the test matrix are welcome.
+`go test ./...` covers the scanner, the rewriter, and the canonical-form
+golden outputs. The resolver layer is exercised end-to-end through
+manual invocation against real GitHub remotes; an `httptest`-backed git
+fixture is on the roadmap.
 
 ## Non-goals
 
-* Replacing plugin managers — keep using `lazy.nvim`, `vim-plug`, etc.
-* Managing lazy-load configuration (event/cmd/keys) — adapter outputs only the pin.
-* Cryptographic verification of commit contents — planned for a later phase via sigstore.
+- Replacing plugin managers — keep using `lazy.nvim`.
+- Managing lazy-load configuration (`event`, `cmd`, `keys`) — vimpin only
+  touches the pinning fields and the annotation comment.
+- Cryptographic verification of commit contents — planned for a later
+  phase via sigstore.
 
 ## License
 

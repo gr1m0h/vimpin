@@ -4,24 +4,26 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const defaultManifestPath = "vimpin.toml"
-
 func NewRootCmd(version string) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "vimpin",
-		Short: "A universal version pinner for Vim/Neovim plugins",
-		Long: `vimpin is a universal version pinner for Vim/Neovim plugins.
+		Short: "A pinact-style commit pinner for Vim/Neovim plugin managers",
+		Long: `vimpin pins every plugin in your lazy.nvim spec to an explicit commit hash,
+inline. It rewrites your existing Lua specs to the canonical form
 
-It pins plugins to explicit commit hashes via a TOML manifest, integrates
-with Renovate for auditable updates, and generates plugin-manager-specific
-specs through pluggable adapters.`,
+  { "owner/repo", commit = "<40-hex>" }, -- tag: <ref>
+
+and ships a Renovate preset so the commit is bumped via reviewable pull
+requests when the tracked tag or branch moves.
+
+Currently only lazy.nvim specs are supported. Support for additional plugin
+managers is planned; see the project README.`,
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
 
-	root.AddCommand(newPinCmd())
-	root.AddCommand(newGenerateCmd())
+	root.AddCommand(newRunCmd())
 	root.AddCommand(newVerifyCmd())
 
 	return root
