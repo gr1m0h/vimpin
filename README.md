@@ -178,8 +178,14 @@ limits.
 
 ## GitHub Actions
 
-Run `vimpin run --check` on every PR and let CI block merges that
-introduce unpinned specs. Example workflow:
+### Recommended: required check on every PR
+
+Treat `vimpin verify --strict` as a **required status check** on `main`. This
+catches three failure modes in one place:
+
+1. New specs that ship without a commit pin (`vimpin run` never ran).
+2. Pin annotations that no longer match their commit (upstream tag rewriting).
+3. Field-order violations that would silently break Renovate's regex.
 
 ```yaml
 name: vimpin
@@ -188,6 +194,8 @@ on:
     paths:
       - 'lua/**/*.lua'
       - 'init.lua'
+permissions:
+  contents: read
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -197,13 +205,37 @@ jobs:
         with:
           go-version: '1.24'
       - run: go install github.com/gr1m0h/vimpin/cmd/vimpin@latest
-      - run: vimpin run --check
-      - run: vimpin verify --strict
+      - run: vimpin run --check       # no rewrite required by this PR?
+      - run: vimpin verify --strict   # pins still match the remote?
 ```
 
-A second workflow can run `vimpin run` on a schedule (or via
-`workflow_dispatch`) and open a PR with the resulting changes; pair with
-Renovate's `dependencyDashboard` so all pin movements stay reviewable.
+Configure `main` branch protection so both `verify / vimpin` jobs are required
+before merge.
+
+### Refresh workflow (optional)
+
+A second workflow can run `vimpin run --refresh` via `workflow_dispatch` (or
+schedule) and open a PR with the resulting changes; pair with Renovate's
+`dependencyDashboard` so all pin movements stay reviewable.
+
+### One-line usage with `vimpin-action`
+
+The companion [`gr1m0h/vimpin-action`](https://github.com/gr1m0h/vimpin-action)
+collapses the install-and-run boilerplate above into a single step:
+
+```yaml
+jobs:
+  vimpin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gr1m0h/vimpin-action@v1
+        with:
+          mode: verify-strict     # or: run-check, run-refresh, ...
+```
+
+The action versions independently of the CLI, so its input surface can
+evolve without forcing a vimpin release.
 
 ## Field-order constraint
 
@@ -237,6 +269,14 @@ custom-manager interface supports today.
 
 ## Roadmap
 
+- **SARIF output for `verify`** — `vimpin verify --format sarif` so failures
+  surface in GitHub Code Scanning instead of plain stderr.
+- **`--diff-file` mode** — accept a unified diff and rewrite only the lines
+  it touches, so large legacy repos can adopt vimpin without a single
+  bulk-pin churn PR.
+- **Config file (`.vimpin.yaml` / `~/.config/vimpin/config.yaml`)** — opt-in
+  rules for per-spec policies (force tag tracking, require commit min-age,
+  exclude paths).
 - **`vimpin add <owner/repo>`** — interactive spec creation that fetches
   the latest release tag (or default branch) and writes a canonical entry.
 - **packer.nvim adapter** — apply the same pattern to packer specs.
