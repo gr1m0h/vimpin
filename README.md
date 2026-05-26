@@ -284,11 +284,12 @@ Tracked as [GitHub Issues](https://github.com/gr1m0h/vimpin/issues?q=is%3Aissue+
 
 ## Comparison
 
-| Tool / artifact                  | Locks?            | Source of truth       | Update flow                                |
+The peer choices for keeping `lazy.nvim` plugin versions reproducible:
+
+| Approach                         | Locks?            | Source of truth       | Update flow                                |
 |----------------------------------|-------------------|-----------------------|--------------------------------------------|
 | `lazy-lock.json` (lazy.nvim)     | Records only      | Last `:Lazy sync`     | `:Lazy update` moves everything            |
 | Hand-written `commit = "..."`    | Yes (commit pin)  | Lua spec              | Nothing automated; manual edits            |
-| `pinact` (GitHub Actions)        | Yes (commit pin)  | Workflow `.yml`       | Renovate PRs against the pinned hash       |
 | `vimpin` + Renovate preset       | Yes (commit pin)  | Lua spec              | Renovate PRs against the pinned hash       |
 
 ## Testing
