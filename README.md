@@ -269,25 +269,18 @@ custom-manager interface supports today.
 
 ## Roadmap
 
-- **SARIF output for `verify`** — `vimpin verify --format sarif` so failures
-  surface in GitHub Code Scanning instead of plain stderr.
-- **`--diff-file` mode** — accept a unified diff and rewrite only the lines
-  it touches, so large legacy repos can adopt vimpin without a single
-  bulk-pin churn PR.
-- **Config file (`.vimpin.yaml` / `~/.config/vimpin/config.yaml`)** — opt-in
-  rules for per-spec policies (force tag tracking, require commit min-age,
-  exclude paths).
-- **`vimpin add <owner/repo>`** — interactive spec creation that fetches
-  the latest release tag (or default branch) and writes a canonical entry.
-- **packer.nvim adapter** — apply the same pattern to packer specs.
-- **vim-plug adapter** — apply the same pattern to vim-plug.
-- **Multi-host clone URLs** — first-class `gitlab.com`, `git.sr.ht`, and
-  custom-host support so non-github specs do not require a git URL rewrite.
-- **Semver `version = "..."` resolution** — parse `version = "^0.1"` style
-  ranges, pick the highest matching tag on the remote, and pin to its
-  commit.
-- **Sigstore-style provenance** — verify commit signatures during `verify
-  --strict` (today vimpin trusts the remote response from `git ls-remote`).
+Tracked as [GitHub Issues](https://github.com/gr1m0h/vimpin/issues?q=is%3Aissue+is%3Aopen+label%3Aenhancement). Highlights:
+
+- **SARIF output for `verify`** ([#1](https://github.com/gr1m0h/vimpin/issues/1))
+- **Diff-mode rewriting** ([#2](https://github.com/gr1m0h/vimpin/issues/2)) — incremental adoption path
+- **Config file `.vimpin.yaml`** ([#3](https://github.com/gr1m0h/vimpin/issues/3)) — per-spec policy rules
+- **`vimpin add <owner/repo>`** ([#4](https://github.com/gr1m0h/vimpin/issues/4))
+- **packer.nvim adapter** ([#5](https://github.com/gr1m0h/vimpin/issues/5))
+- **vim-plug adapter** ([#6](https://github.com/gr1m0h/vimpin/issues/6))
+- **Multi-host clone URLs** ([#7](https://github.com/gr1m0h/vimpin/issues/7)) — gitlab.com, sr.ht, custom hosts
+- **Semver `version = "..."` resolution** ([#8](https://github.com/gr1m0h/vimpin/issues/8))
+- **Sigstore-style provenance** ([#9](https://github.com/gr1m0h/vimpin/issues/9))
+- **`httptest`-backed git fixture** ([#10](https://github.com/gr1m0h/vimpin/issues/10)) — hermetic resolver tests
 
 ## Comparison
 
