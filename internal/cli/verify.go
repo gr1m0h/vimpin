@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/gr1m0h/vimpin/internal/luaspec"
-	"github.com/gr1m0h/vimpin/internal/resolver"
 	"github.com/spf13/cobra"
 )
 
@@ -42,7 +41,7 @@ func runVerify(ctx context.Context, paths []string, strict bool) error {
 		return err
 	}
 
-	rsv := resolver.NewGitResolver()
+	rsv := newResolver()
 	var problems []string
 	total := 0
 
@@ -73,8 +72,14 @@ func runVerify(ctx context.Context, paths []string, strict bool) error {
 			if !strict {
 				continue
 			}
+			cloneURL, err := cloneURLForRepo(sp.Repo)
+			if err != nil {
+				problems = append(problems,
+					fmt.Sprintf("%s: %s: %v", f, sp.Repo, err))
+				continue
+			}
 			rt := resolverRefType(sp.CommentRefType)
-			match, err := rsv.ResolveAt(ctx, cloneURLForRepo(sp.Repo), sp.CommentRef, rt, sp.Commit())
+			match, err := rsv.ResolveAt(ctx, cloneURL, sp.CommentRef, rt, sp.Commit())
 			if err != nil {
 				problems = append(problems,
 					fmt.Sprintf("%s: %s: resolve %s %q failed: %v", f, sp.Repo, sp.CommentRefType, sp.CommentRef, err))

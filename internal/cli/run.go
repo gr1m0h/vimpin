@@ -5,12 +5,19 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/gr1m0h/vimpin/internal/luaspec"
 	"github.com/gr1m0h/vimpin/internal/resolver"
 	"github.com/spf13/cobra"
 )
+
+// repoSafe restricts the positional "owner/repo" string of a lazy.nvim spec
+// to a conservative alphabet. Refusing anything outside this set blocks
+// crafted spec values like "evil@malicious.com:80/repo" or "../etc/passwd"
+// from being assembled into a clone URL.
+var repoSafe = regexp.MustCompile(`^[A-Za-z0-9._\-]+/[A-Za-z0-9._\-]+$`)
 
 func newRunCmd() *cobra.Command {
 	var (
@@ -54,7 +61,7 @@ func runRun(ctx context.Context, paths []string, refresh, check, dryRun bool) er
 		return err
 	}
 
-	rsv := resolver.NewGitResolver()
+	rsv := newResolver()
 	changed := false
 
 	for _, f := range files {
@@ -87,8 +94,12 @@ func runRun(ctx context.Context, paths []string, refresh, check, dryRun bool) er
 				continue
 			}
 
+			cloneURL, err := cloneURLForRepo(sp.Repo)
+			if err != nil {
+				return fmt.Errorf("%s: %s: %w", f, sp.Repo, err)
+			}
 			rt := resolverRefType(refType)
-			commit, err := rsv.Resolve(ctx, cloneURLForRepo(sp.Repo), refVal, rt)
+			commit, err := rsv.Resolve(ctx, cloneURL, refVal, rt)
 			if err != nil {
 				return fmt.Errorf("resolve %s %s %q: %w", sp.Repo, refType, refVal, err)
 			}
@@ -143,13 +154,16 @@ func resolverRefType(rt luaspec.RefType) resolver.RefType {
 // cloneURLForRepo returns the canonical HTTPS clone URL for an owner/repo on
 // github.com. Other hosts are not supported in v0; users with mirrors should
 // configure the git remote helper to redirect github.com URLs.
-func cloneURLForRepo(repo string) string {
-	// Defensive: if the user wrote a full URL in the spec table somehow,
-	// pass it through verbatim. This shouldn't happen in well-formed Lua
-	// because spec.Repo is taken from the positional "owner/name" string.
-	if strings.HasPrefix(repo, "http://") || strings.HasPrefix(repo, "https://") {
-		return repo
+//
+// The repo string is rejected unless it matches repoSafe, which restricts
+// the value to an unambiguous "owner/name" form using only characters that
+// cannot inject auth components, ports, or path traversal into the URL.
+func cloneURLForRepo(repo string) (string, error) {
+	if !repoSafe.MatchString(repo) {
+		return "", fmt.Errorf("invalid repo %q: must match owner/name with [A-Za-z0-9._-] characters", repo)
 	}
 	u := &url.URL{Scheme: "https", Host: "github.com", Path: "/" + repo}
-	return u.String()
+	return u.String(), nil
 }
+
+var _ = strings.HasPrefix // retained for potential future url-passthrough logic

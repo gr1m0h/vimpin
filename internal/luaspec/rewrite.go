@@ -147,14 +147,12 @@ func buildEdits(src []byte, u Update) ([]edit, error) {
 			repl:  " " + annot,
 		})
 	} else {
-		// Single-line spec: place after closing brace and any trailing comma.
-		insertAt := s.CloseBraceEnd
-		for insertAt < len(src) && (src[insertAt] == ' ' || src[insertAt] == '\t') {
-			insertAt++
-		}
-		if insertAt < len(src) && src[insertAt] == ',' {
-			insertAt++
-		}
+		// Single-line spec: place annotation at the end of the line that
+		// contains the closing brace. Anchoring on the newline (rather than
+		// stepping past the close brace + optional comma) ensures the line
+		// comment never swallows whatever else lives on the same line, e.g.
+		// the outer table's "}" in a degenerate "return { { ... } }" file.
+		insertAt := lineEnd(src, s.CloseBraceEnd)
 		edits = append(edits, edit{
 			start: insertAt,
 			end:   insertAt,

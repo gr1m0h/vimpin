@@ -6,8 +6,31 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 )
+
+// ErrInvalidSHA is returned when the remote responds with something that is
+// not a 40-character lowercase hex SHA. This guards against a hostile or
+// compromised git server attempting to inject arbitrary text into the spec
+// file vimpin is about to rewrite.
+var ErrInvalidSHA = errors.New("remote returned a value that is not a 40-character lowercase hex SHA")
+
+// ErrUnsafeRef is returned when a tag or branch name contains characters
+// outside the allow-list. Refs are passed verbatim to git ls-remote and
+// flow back into the Lua source as the annotation comment, so we reject
+// anything that could surprise either side.
+var ErrUnsafeRef = errors.New("ref name contains unsafe characters")
+
+// sha40 matches exactly 40 lowercase hex characters.
+var sha40 = regexp.MustCompile(`^[a-f0-9]{40}$`)
+
+// refSafe restricts tag/branch names to a conservative ASCII alphabet:
+// alphanumerics, dot, underscore, hyphen, and forward slash. This is a
+// strict subset of what git itself accepts but it covers the realistic
+// universe of release tags and branch names while preventing shell-metas
+// and control characters from sneaking through.
+var refSafe = regexp.MustCompile(`^[A-Za-z0-9._/\-]+$`)
 
 // GitResolver resolves refs by shelling out to the `git ls-remote` command.
 // It relies on the local git installation handling any host credentials
@@ -61,9 +84,13 @@ func (r *GitResolver) Resolve(ctx context.Context, cloneURL, ref string, refType
 		if !ok {
 			continue
 		}
-		if name == refPath {
-			return sha, nil
+		if name != refPath {
+			continue
 		}
+		if !sha40.MatchString(sha) {
+			return "", fmt.Errorf("%w: %q for %s in %s", ErrInvalidSHA, sha, ref, cloneURL)
+		}
+		return sha, nil
 	}
 	return "", fmt.Errorf("%w: %s in %s", ErrNotFound, ref, cloneURL)
 }
@@ -97,6 +124,9 @@ func (r *GitResolver) run(ctx context.Context, args ...string) (string, error) {
 func refPathFor(ref string, refType RefType) (string, error) {
 	if ref == "" {
 		return "", errors.New("ref is empty")
+	}
+	if !refSafe.MatchString(ref) {
+		return "", fmt.Errorf("%w: %q", ErrUnsafeRef, ref)
 	}
 	switch refType {
 	case RefTag:
