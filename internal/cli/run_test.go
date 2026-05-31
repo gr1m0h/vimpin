@@ -435,7 +435,7 @@ func TestRun_noAPI_failsOnUnpinnedSpec(t *testing.T) {
 }
 `)
 	err := runRun(context.Background(), []string{path}, runOptions{NoAPI: true})
-	ensureErrContains(t, err, "commit field missing")
+	ensureErrContains(t, err, "needs `vimpin run` to pin")
 }
 
 func TestRun_noAPI_failsOnMissingAnnotation(t *testing.T) {
@@ -446,6 +446,93 @@ func TestRun_noAPI_failsOnMissingAnnotation(t *testing.T) {
 `)
 	err := runRun(context.Background(), []string{path}, runOptions{NoAPI: true})
 	ensureErrContains(t, err, "missing -- tag: / -- branch: annotation")
+}
+
+// TestRun_noAPI_skipsBareSpecs covers the incremental-adoption path: a
+// repo with many bare `{ "owner/repo" }` specs alongside a few canonical
+// ones must pass --no-api. Bare specs are treated as "not yet under
+// vimpin's management" and silently skipped.
+func TestRun_noAPI_skipsBareSpecs(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "lua/plugins/x.lua", `return {
+  { "owner/bare1" },
+  { "owner/bare2", opts = { a = 1 } },
+  { "owner/canonical", commit = "`+hex40('a')+`" }, -- tag: v1.0
+}
+`)
+	if err := runRun(context.Background(), []string{path}, runOptions{NoAPI: true}); err != nil {
+		t.Errorf("--no-api should pass when bare specs coexist with canonical ones: %v", err)
+	}
+}
+
+// TestRun_verify_preservesAmbiguousAnnotation guards the case where two
+// tags share the same commit (e.g. "stable" aliases "v1.0"). The
+// operator's chosen annotation must be preserved as long as it still
+// resolves to the recorded SHA on the remote.
+func TestRun_verify_preservesAmbiguousAnnotation(t *testing.T) {
+	dir := t.TempDir()
+	original := `return {
+  { "a/b", commit = "` + hex40('a') + `" }, -- tag: v1.0
+}
+`
+	path := writeFile(t, dir, "lua/plugins/x.lua", original)
+
+	fr := newFakeResolver()
+	// v1.0 still resolves to the recorded SHA → no correction.
+	fr.add(resolver.RefTag, "https://github.com/a/b", "v1.0", hex40('a'))
+	// SHA also lives under "stable" tag, which the naive reverse lookup
+	// might pick first. The forward-check must short-circuit before this
+	// ever matters.
+	fr.addSHALookup("https://github.com/a/b", hex40('a'), "stable")
+	withFakeResolver(t, fr)
+
+	if err := runRun(context.Background(), []string{path}, runOptions{Verify: true}); err != nil {
+		t.Fatalf("runRun --verify: %v", err)
+	}
+	if got := readFile(t, dir, "lua/plugins/x.lua"); got != original {
+		t.Errorf("annotation must be preserved when it still resolves on remote:\n%s", got)
+	}
+}
+
+func TestRun_verify_skipsBareSpecs(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "lua/plugins/x.lua", `return {
+  { "owner/bare" },
+  { "owner/canonical", commit = "`+hex40('a')+`" }, -- tag: v1.0
+}
+`)
+	fr := newFakeResolver()
+	fr.addSHALookup("https://github.com/owner/canonical", hex40('a'), "v1.0")
+	withFakeResolver(t, fr)
+
+	if err := runRun(context.Background(), []string{path}, runOptions{Verify: true}); err != nil {
+		t.Errorf("--verify should pass with bare + canonical mix: %v", err)
+	}
+}
+
+func TestRun_default_skipsBareSpecsSilently(t *testing.T) {
+	dir := t.TempDir()
+	src := `return {
+  { "owner/bare" },
+  { "owner/x", tag = "v1" },
+}
+`
+	path := writeFile(t, dir, "lua/plugins/x.lua", src)
+
+	fr := newFakeResolver()
+	fr.add(resolver.RefTag, "https://github.com/owner/x", "v1", hex40('a'))
+	withFakeResolver(t, fr)
+
+	if err := runRun(context.Background(), []string{path}, runOptions{}); err != nil {
+		t.Fatalf("runRun: %v", err)
+	}
+	got := readFile(t, dir, "lua/plugins/x.lua")
+	if !strings.Contains(got, `{ "owner/bare" }`) {
+		t.Errorf("bare spec should be untouched:\n%s", got)
+	}
+	if !strings.Contains(got, hex40('a')) {
+		t.Errorf("field-form spec should still be pinned:\n%s", got)
+	}
 }
 
 // ---------------------------------------------------------------------------

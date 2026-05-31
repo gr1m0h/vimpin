@@ -147,13 +147,16 @@ func runInitialPin(ctx context.Context, files []string, check bool) error {
 			if sp.Ignored {
 				continue
 			}
+			if isOutOfScope(sp) {
+				continue
+			}
 			refType, refVal := sp.SourceRef()
 			if refType == luaspec.RefNone {
-				if sp.Commit() != "" {
-					fmt.Fprintf(os.Stderr, "warn: %s: %s is frozen (commit only, no tag/branch annotation) — skipping\n", f, sp.Repo)
-				} else {
-					fmt.Fprintf(os.Stderr, "warn: %s: %s has no tag/branch/version — add one or use -- vimpin:ignore\n", f, sp.Repo)
-				}
+				// Commit-only spec without annotation. Out of scope for
+				// the initial pin pass but worth surfacing as a warning
+				// because the operator probably wanted vimpin to manage
+				// this and forgot the annotation.
+				fmt.Fprintf(os.Stderr, "warn: %s: %s is frozen (commit only, no tag/branch annotation) — skipping\n", f, sp.Repo)
 				continue
 			}
 			// Canonical form already (commit + matching annotation): skip.
@@ -199,6 +202,12 @@ func runInitialPin(ctx context.Context, files []string, check bool) error {
 // annotation, reverse-resolve the SHA to find what tag it actually
 // corresponds to, and correct the annotation comment if it drifted. The
 // commit field is never touched.
+//
+// Specs that are not yet under vimpin's management (bare positional, no
+// commit / tag / branch / version field) are skipped silently. This is
+// the incremental-adoption escape hatch: a user can add `-- tag: ...`
+// or `commit = "..."` later without first having to mark dozens of bare
+// specs with `-- vimpin:ignore`.
 func runVerify(ctx context.Context, files []string, check bool) error {
 	rsv := newResolver()
 	changed := false
@@ -218,6 +227,9 @@ func runVerify(ctx context.Context, files []string, check bool) error {
 			if sp.Ignored {
 				continue
 			}
+			if isOutOfScope(sp) {
+				continue
+			}
 			commit := sp.Commit()
 			if commit == "" {
 				problems = append(problems,
@@ -234,6 +246,20 @@ func runVerify(ctx context.Context, files []string, check bool) error {
 			if err != nil {
 				return fmt.Errorf("%s: %s: %w", f, sp.Repo, err)
 			}
+
+			// Forward-check first: if the existing annotation still
+			// resolves to the recorded SHA on the remote, the spec is
+			// drift-free. This guards against multi-tag commits (e.g.
+			// "stable" aliasing "v1.2.3") where a naive reverse lookup
+			// would arbitrarily pick one tag and "correct" the
+			// operator's intent.
+			if sp.CommentRefType == luaspec.RefTag && sp.CommentRef != "" {
+				current, err := rsv.Resolve(ctx, cloneURL, sp.CommentRef, resolver.RefTag)
+				if err == nil && current == commit {
+					continue
+				}
+			}
+
 			rt, ref, err := rsv.LookupSHA(ctx, cloneURL, commit)
 			if err != nil {
 				return fmt.Errorf("lookup %s %s: %w", sp.Repo, commit, err)
@@ -291,6 +317,9 @@ func runUpdate(ctx context.Context, files []string, check bool) error {
 		var updates []luaspec.Update
 		for _, sp := range specs {
 			if sp.Ignored {
+				continue
+			}
+			if isOutOfScope(sp) {
 				continue
 			}
 			refType, _ := sp.SourceRef()
@@ -351,9 +380,13 @@ func runUpdate(ctx context.Context, files []string, check bool) error {
 	return nil
 }
 
-// runNoAPI performs a purely structural check: each spec must already have
-// a 40-hex commit and a tag/branch annotation. No network calls are made.
-// Always read-only; --check is implied.
+// runNoAPI performs a purely structural check: each spec under vimpin's
+// management must already have a 40-hex commit and a tag/branch
+// annotation. No network calls are made. Always read-only; --check is
+// implied.
+//
+// Bare specs (no commit / tag / branch / version) are treated as
+// "out of scope" and skipped silently — see isOutOfScope.
 func runNoAPI(files []string, check bool) error {
 	_ = check // no-api is inherently read-only
 	var problems []string
@@ -371,10 +404,13 @@ func runNoAPI(files []string, check bool) error {
 			if sp.Ignored {
 				continue
 			}
+			if isOutOfScope(sp) {
+				continue
+			}
 			total++
 			if !hex40Pat.MatchString(sp.Commit()) {
 				problems = append(problems,
-					fmt.Sprintf("%s: %s: commit field missing or not a 40-character hex hash", f, sp.Repo))
+					fmt.Sprintf("%s: %s: needs `vimpin run` to pin (has tag/branch/version but no commit)", f, sp.Repo))
 				continue
 			}
 			if sp.CommentRefType == luaspec.RefNone || sp.CommentRef == "" {
@@ -386,8 +422,23 @@ func runNoAPI(files []string, check bool) error {
 	if len(problems) > 0 {
 		return fmt.Errorf("no-api check failed:\n  - %s", strings.Join(problems, "\n  - "))
 	}
-	fmt.Fprintf(os.Stdout, "no-api ok: %d spec(s) across %d file(s)\n", total, len(files))
+	fmt.Fprintf(os.Stdout, "no-api ok: %d in-scope spec(s) across %d file(s)\n", total, len(files))
 	return nil
+}
+
+// isOutOfScope reports whether a spec is currently "not adopted by vimpin".
+// A spec is in scope if it has any pin-relevant field set: commit, tag,
+// branch, or version. A bare positional-only spec is treated as out of
+// scope so users can incrementally add specs to vimpin's management
+// without first marking every other entry with -- vimpin:ignore.
+func isOutOfScope(sp luaspec.Spec) bool {
+	if sp.Commit() != "" {
+		return false
+	}
+	if sp.Tag() != "" || sp.Branch() != "" || sp.Version() != "" {
+		return false
+	}
+	return true
 }
 
 // applyUpdates writes the given updates to disk (or stages them with --check)
