@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strings"
+
+	"golang.org/x/mod/semver"
 )
 
 // ErrInvalidSHA is returned when the remote responds with something that is
@@ -77,31 +80,156 @@ func (r *GitResolver) Resolve(ctx context.Context, cloneURL, ref string, refType
 		return "", fmt.Errorf("git ls-remote %s %s: %w", cloneURL, ref, err)
 	}
 
-	// Output is one or more lines of "<sha>\t<refname>". Pick the line
-	// whose refname matches exactly so we ignore peeled tag entries ("^{}").
+	// For tags, prefer the peeled line (`refs/tags/X^{}`) which exposes the
+	// underlying commit hash of an annotated tag. Fall back to the object
+	// line for lightweight tags.
+	var peeled, obj string
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		sha, name, ok := splitLsRemoteLine(line)
 		if !ok {
 			continue
 		}
-		if name != refPath {
-			continue
+		switch {
+		case refType == RefTag && name == refPath+"^{}":
+			peeled = sha
+		case name == refPath:
+			obj = sha
 		}
-		if !sha40.MatchString(sha) {
-			return "", fmt.Errorf("%w: %q for %s in %s", ErrInvalidSHA, sha, ref, cloneURL)
-		}
-		return sha, nil
 	}
-	return "", fmt.Errorf("%w: %s in %s", ErrNotFound, ref, cloneURL)
+	pick := peeled
+	if pick == "" {
+		pick = obj
+	}
+	if pick == "" {
+		return "", fmt.Errorf("%w: %s in %s", ErrNotFound, ref, cloneURL)
+	}
+	if !sha40.MatchString(pick) {
+		return "", fmt.Errorf("%w: %q for %s in %s", ErrInvalidSHA, pick, ref, cloneURL)
+	}
+	return pick, nil
 }
 
-// ResolveAt checks whether ref still points at the recorded commit.
-func (r *GitResolver) ResolveAt(ctx context.Context, cloneURL, ref string, refType RefType, commit string) (bool, error) {
-	got, err := r.Resolve(ctx, cloneURL, ref, refType)
-	if err != nil {
-		return false, err
+// LookupSHA scans `git ls-remote --tags` output and returns the tag whose
+// commit equals sha. Annotated-tag peeled lines (`refs/tags/X^{}`) are
+// preferred because they expose the actual commit; lightweight-tag object
+// lines act as a fallback.
+//
+// Returns (RefNone, "", nil) if no tag matches.
+func (r *GitResolver) LookupSHA(ctx context.Context, cloneURL, sha string) (RefType, string, error) {
+	if !sha40.MatchString(sha) {
+		return RefNone, "", fmt.Errorf("%w: %q", ErrInvalidSHA, sha)
 	}
-	return got == commit, nil
+	out, err := r.run(ctx, "ls-remote", "--tags", cloneURL)
+	if err != nil {
+		return RefNone, "", fmt.Errorf("git ls-remote --tags %s: %w", cloneURL, err)
+	}
+
+	var peeledHit, objHit string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		s, name, ok := splitLsRemoteLine(line)
+		if !ok || s != sha {
+			continue
+		}
+		switch {
+		case strings.HasSuffix(name, "^{}"):
+			tag := strings.TrimPrefix(strings.TrimSuffix(name, "^{}"), "refs/tags/")
+			if peeledHit == "" {
+				peeledHit = tag
+			}
+		case strings.HasPrefix(name, "refs/tags/"):
+			tag := strings.TrimPrefix(name, "refs/tags/")
+			if objHit == "" {
+				objHit = tag
+			}
+		}
+	}
+	if peeledHit != "" {
+		return RefTag, peeledHit, nil
+	}
+	if objHit != "" {
+		return RefTag, objHit, nil
+	}
+	return RefNone, "", nil
+}
+
+// LatestTag returns the highest-precedence semver tag and its commit on
+// the remote. Tags that are not valid semver (after stripping a leading
+// "v") are ignored. Peeled lines are preferred so annotated tags resolve
+// to their underlying commit.
+func (r *GitResolver) LatestTag(ctx context.Context, cloneURL string) (string, string, error) {
+	out, err := r.run(ctx, "ls-remote", "--tags", cloneURL)
+	if err != nil {
+		return "", "", fmt.Errorf("git ls-remote --tags %s: %w", cloneURL, err)
+	}
+
+	// peeledSHA[tag] -> sha for "refs/tags/X^{}", objSHA[tag] -> sha for
+	// "refs/tags/X". Peeled wins when both exist.
+	peeledSHA := map[string]string{}
+	objSHA := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		s, name, ok := splitLsRemoteLine(line)
+		if !ok {
+			continue
+		}
+		if !sha40.MatchString(s) {
+			continue
+		}
+		switch {
+		case strings.HasSuffix(name, "^{}"):
+			tag := strings.TrimPrefix(strings.TrimSuffix(name, "^{}"), "refs/tags/")
+			peeledSHA[tag] = s
+		case strings.HasPrefix(name, "refs/tags/"):
+			tag := strings.TrimPrefix(name, "refs/tags/")
+			objSHA[tag] = s
+		}
+	}
+
+	type entry struct {
+		tag string
+		sha string
+	}
+	var tags []entry
+	seen := map[string]bool{}
+	add := func(tag, sha string) {
+		if seen[tag] {
+			return
+		}
+		canonical := tag
+		if !strings.HasPrefix(canonical, "v") {
+			canonical = "v" + canonical
+		}
+		if !semver.IsValid(canonical) {
+			return
+		}
+		seen[tag] = true
+		tags = append(tags, entry{tag: tag, sha: sha})
+	}
+	for tag, sha := range peeledSHA {
+		add(tag, sha)
+	}
+	for tag, sha := range objSHA {
+		// Only fall back to object line if no peeled equivalent was seen.
+		if _, ok := peeledSHA[tag]; ok {
+			continue
+		}
+		add(tag, sha)
+	}
+
+	if len(tags) == 0 {
+		return "", "", fmt.Errorf("%w: no semver tag in %s", ErrNotFound, cloneURL)
+	}
+
+	sort.Slice(tags, func(i, j int) bool {
+		a, b := tags[i].tag, tags[j].tag
+		if !strings.HasPrefix(a, "v") {
+			a = "v" + a
+		}
+		if !strings.HasPrefix(b, "v") {
+			b = "v" + b
+		}
+		return semver.Compare(a, b) > 0
+	})
+	return tags[0].tag, tags[0].sha, nil
 }
 
 func (r *GitResolver) run(ctx context.Context, args ...string) (string, error) {

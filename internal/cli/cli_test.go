@@ -12,22 +12,37 @@ import (
 	"github.com/gr1m0h/vimpin/internal/resolver"
 )
 
-// fakeResolver returns canned responses for a fixed set of (url, ref, refType)
-// triples. Unknown lookups return resolver.ErrNotFound so tests can also
-// exercise error paths.
+// fakeResolver returns canned responses for a fixed set of inputs. It
+// records every call for assertion.
+//
+// refs       : keyed by "<refType>|<url>|<ref>" -> commit hash
+// shaToTag   : keyed by "<url>|<sha>"           -> tag name (LookupSHA)
+// latestTag  : keyed by url                      -> {tag, sha} (LatestTag)
 type fakeResolver struct {
-	// refs maps "<refType>|<url>|<ref>" to the resolved commit hash.
-	refs map[string]string
-	// calls records every Resolve / ResolveAt invocation for assertion.
-	calls []string
+	refs      map[string]string
+	shaToTag  map[string]string
+	latestTag map[string]struct{ tag, sha string }
+	calls     []string
 }
 
 func newFakeResolver() *fakeResolver {
-	return &fakeResolver{refs: map[string]string{}}
+	return &fakeResolver{
+		refs:      map[string]string{},
+		shaToTag:  map[string]string{},
+		latestTag: map[string]struct{ tag, sha string }{},
+	}
 }
 
 func (f *fakeResolver) add(rt resolver.RefType, url, ref, commit string) {
 	f.refs[fakeKey(rt, url, ref)] = commit
+}
+
+func (f *fakeResolver) addSHALookup(url, sha, tag string) {
+	f.shaToTag[url+"|"+sha] = tag
+}
+
+func (f *fakeResolver) addLatestTag(url, tag, sha string) {
+	f.latestTag[url] = struct{ tag, sha string }{tag, sha}
 }
 
 func (f *fakeResolver) Resolve(ctx context.Context, url, ref string, rt resolver.RefType) (string, error) {
@@ -38,13 +53,20 @@ func (f *fakeResolver) Resolve(ctx context.Context, url, ref string, rt resolver
 	return "", fmt.Errorf("%w: %s in %s", resolver.ErrNotFound, ref, url)
 }
 
-func (f *fakeResolver) ResolveAt(ctx context.Context, url, ref string, rt resolver.RefType, commit string) (bool, error) {
-	f.calls = append(f.calls, fmt.Sprintf("ResolveAt %s %s %s %s", refTypeStr(rt), url, ref, commit))
-	got, ok := f.refs[fakeKey(rt, url, ref)]
-	if !ok {
-		return false, fmt.Errorf("%w: %s in %s", resolver.ErrNotFound, ref, url)
+func (f *fakeResolver) LookupSHA(ctx context.Context, url, sha string) (resolver.RefType, string, error) {
+	f.calls = append(f.calls, fmt.Sprintf("LookupSHA %s %s", url, sha))
+	if tag, ok := f.shaToTag[url+"|"+sha]; ok {
+		return resolver.RefTag, tag, nil
 	}
-	return got == commit, nil
+	return resolver.RefNone, "", nil
+}
+
+func (f *fakeResolver) LatestTag(ctx context.Context, url string) (string, string, error) {
+	f.calls = append(f.calls, fmt.Sprintf("LatestTag %s", url))
+	if v, ok := f.latestTag[url]; ok {
+		return v.tag, v.sha, nil
+	}
+	return "", "", fmt.Errorf("%w: no semver tag in %s", resolver.ErrNotFound, url)
 }
 
 func fakeKey(rt resolver.RefType, url, ref string) string {
@@ -58,8 +80,8 @@ func refTypeStr(rt resolver.RefType) string {
 	return "tag"
 }
 
-// withFakeResolver installs the provided resolver as the package-level factory
-// for the duration of the test, restoring the original on cleanup.
+// withFakeResolver installs the provided resolver as the package-level
+// factory for the duration of the test, restoring the original on cleanup.
 func withFakeResolver(t *testing.T, r resolver.Resolver) {
 	t.Helper()
 	orig := newResolver
@@ -67,7 +89,6 @@ func withFakeResolver(t *testing.T, r resolver.Resolver) {
 	t.Cleanup(func() { newResolver = orig })
 }
 
-// writeFile writes data under dir+rel, creating parent directories as needed.
 func writeFile(t *testing.T, dir, rel, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, rel)
@@ -80,7 +101,6 @@ func writeFile(t *testing.T, dir, rel, content string) string {
 	return path
 }
 
-// readFile reads a file under dir+rel and returns its contents.
 func readFile(t *testing.T, dir, rel string) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(dir, rel))
@@ -90,9 +110,6 @@ func readFile(t *testing.T, dir, rel string) string {
 	return string(b)
 }
 
-// chdir temporarily changes the working directory and restores it on cleanup.
-// Tests that depend on default-path discovery use this; tests that pass paths
-// explicitly should prefer to do so.
 func chdir(t *testing.T, dir string) {
 	t.Helper()
 	orig, err := os.Getwd()
@@ -109,12 +126,12 @@ func chdir(t *testing.T, dir string) {
 	})
 }
 
-// hex40 returns a 40-character hex string composed of the given byte repeated.
-// Kept as a helper so test source files do not contain 40-char hex literals
-// (some local commit-hook scanners flag those as potential secrets).
+// hex40 returns a 40-character hex string composed of the given byte
+// repeated. Kept as a helper so test source files do not contain 40-char
+// hex literals (some local commit-hook scanners flag those as potential
+// secrets).
 func hex40(c byte) string { return strings.Repeat(string(c), 40) }
 
-// ensureErr fails the test if err is nil.
 func ensureErr(t *testing.T, err error) {
 	t.Helper()
 	if err == nil {
@@ -122,8 +139,6 @@ func ensureErr(t *testing.T, err error) {
 	}
 }
 
-// ensureErrContains fails the test unless err is non-nil and its message
-// contains the given substring.
 func ensureErrContains(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil {
@@ -134,5 +149,4 @@ func ensureErrContains(t *testing.T, err error, want string) {
 	}
 }
 
-// silence the unused-import warning if a test file ever stops using errors.
 var _ = errors.New

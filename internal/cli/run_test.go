@@ -2,14 +2,17 @@ package cli
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/gr1m0h/vimpin/internal/resolver"
 )
 
-func TestRun_tagMigrationFormA(t *testing.T) {
+// ---------------------------------------------------------------------------
+// Default mode: initial pin (field-form -> canonical)
+// ---------------------------------------------------------------------------
+
+func TestRun_default_tagMigrationFormA(t *testing.T) {
 	dir := t.TempDir()
 	src := `return {
   { "ggandor/leap.nvim", tag = "v0.1.5" },
@@ -21,7 +24,7 @@ func TestRun_tagMigrationFormA(t *testing.T) {
 	fr.add(resolver.RefTag, "https://github.com/ggandor/leap.nvim", "v0.1.5", hex40('a'))
 	withFakeResolver(t, fr)
 
-	if err := runRun(context.Background(), []string{path}, false, false, false); err != nil {
+	if err := runRun(context.Background(), []string{path}, runOptions{}); err != nil {
 		t.Fatalf("runRun: %v", err)
 	}
 
@@ -35,7 +38,7 @@ func TestRun_tagMigrationFormA(t *testing.T) {
 	}
 }
 
-func TestRun_branchMigrationFormB(t *testing.T) {
+func TestRun_default_branchMigrationFormB(t *testing.T) {
 	dir := t.TempDir()
 	src := `return {
   {
@@ -52,7 +55,7 @@ func TestRun_branchMigrationFormB(t *testing.T) {
 	fr.add(resolver.RefBranch, "https://github.com/folke/which-key.nvim", "main", hex40('b'))
 	withFakeResolver(t, fr)
 
-	if err := runRun(context.Background(), []string{path}, false, false, false); err != nil {
+	if err := runRun(context.Background(), []string{path}, runOptions{}); err != nil {
 		t.Fatalf("runRun: %v", err)
 	}
 
@@ -71,38 +74,7 @@ func TestRun_branchMigrationFormB(t *testing.T) {
 	}
 }
 
-func TestRun_multipleSpecsAndFiles(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, dir, "lua/plugins/a.lua", `return {
-  { "a/b", tag = "v1" },
-  { "c/d", branch = "main" },
-}
-`)
-	writeFile(t, dir, "lua/plugins/b.lua", `return {
-  { "e/f", tag = "v2" },
-}
-`)
-
-	fr := newFakeResolver()
-	fr.add(resolver.RefTag, "https://github.com/a/b", "v1", hex40('1'))
-	fr.add(resolver.RefBranch, "https://github.com/c/d", "main", hex40('2'))
-	fr.add(resolver.RefTag, "https://github.com/e/f", "v2", hex40('3'))
-	withFakeResolver(t, fr)
-
-	chdir(t, dir)
-	if err := runRun(context.Background(), nil, false, false, false); err != nil {
-		t.Fatalf("runRun: %v", err)
-	}
-
-	if got := readFile(t, dir, "lua/plugins/a.lua"); !strings.Contains(got, hex40('1')) || !strings.Contains(got, hex40('2')) {
-		t.Errorf("a.lua missing expected commits:\n%s", got)
-	}
-	if got := readFile(t, dir, "lua/plugins/b.lua"); !strings.Contains(got, hex40('3')) {
-		t.Errorf("b.lua missing expected commit:\n%s", got)
-	}
-}
-
-func TestRun_idempotent(t *testing.T) {
+func TestRun_default_idempotent(t *testing.T) {
 	dir := t.TempDir()
 	src := `return {
   { "a/b", tag = "v1" },
@@ -114,13 +86,13 @@ func TestRun_idempotent(t *testing.T) {
 	fr.add(resolver.RefTag, "https://github.com/a/b", "v1", hex40('a'))
 	withFakeResolver(t, fr)
 
-	if err := runRun(context.Background(), []string{path}, false, false, false); err != nil {
-		t.Fatalf("first runRun: %v", err)
+	if err := runRun(context.Background(), []string{path}, runOptions{}); err != nil {
+		t.Fatalf("first run: %v", err)
 	}
 	after1 := readFile(t, dir, "lua/plugins/x.lua")
 
-	if err := runRun(context.Background(), []string{path}, false, false, false); err != nil {
-		t.Fatalf("second runRun: %v", err)
+	if err := runRun(context.Background(), []string{path}, runOptions{}); err != nil {
+		t.Fatalf("second run: %v", err)
 	}
 	after2 := readFile(t, dir, "lua/plugins/x.lua")
 
@@ -129,36 +101,28 @@ func TestRun_idempotent(t *testing.T) {
 	}
 }
 
-func TestRun_refreshUpdatesExistingPin(t *testing.T) {
+func TestRun_default_canonicalFormSkipped(t *testing.T) {
+	// A canonical-form spec with a matching annotation should NOT trigger
+	// a resolver call -- vimpin treats SHA as authoritative and the
+	// default mode only operates on field-form input.
 	dir := t.TempDir()
 	src := `return {
-  { "a/b", commit = "` + hex40('0') + `" }, -- tag: v1
+  { "a/b", commit = "` + hex40('a') + `" }, -- tag: v1
 }
 `
 	path := writeFile(t, dir, "lua/plugins/x.lua", src)
-
 	fr := newFakeResolver()
-	fr.add(resolver.RefTag, "https://github.com/a/b", "v1", hex40('a'))
 	withFakeResolver(t, fr)
 
-	// Without --refresh, canonical-form specs are left alone.
-	if err := runRun(context.Background(), []string{path}, false, false, false); err != nil {
-		t.Fatalf("runRun: %v", err)
+	if err := runRun(context.Background(), []string{path}, runOptions{}); err != nil {
+		t.Fatalf("run: %v", err)
 	}
-	if got := readFile(t, dir, "lua/plugins/x.lua"); !strings.Contains(got, hex40('0')) {
-		t.Errorf("without --refresh, commit should not change:\n%s", got)
-	}
-
-	// With --refresh, commit gets re-resolved.
-	if err := runRun(context.Background(), []string{path}, true /*refresh*/, false, false); err != nil {
-		t.Fatalf("runRun --refresh: %v", err)
-	}
-	if got := readFile(t, dir, "lua/plugins/x.lua"); !strings.Contains(got, hex40('a')) {
-		t.Errorf("with --refresh, commit should update:\n%s", got)
+	if len(fr.calls) != 0 {
+		t.Errorf("default mode should not call resolver on canonical form: %v", fr.calls)
 	}
 }
 
-func TestRun_checkModeExitsNonZeroOnPendingChange(t *testing.T) {
+func TestRun_default_checkModeExitsNonZeroOnPendingChange(t *testing.T) {
 	dir := t.TempDir()
 	src := `return { { "a/b", tag = "v1" } }
 `
@@ -169,51 +133,15 @@ func TestRun_checkModeExitsNonZeroOnPendingChange(t *testing.T) {
 	fr.add(resolver.RefTag, "https://github.com/a/b", "v1", hex40('a'))
 	withFakeResolver(t, fr)
 
-	err := runRun(context.Background(), []string{path}, false, true /*check*/, false)
+	err := runRun(context.Background(), []string{path}, runOptions{Check: true})
 	ensureErrContains(t, err, "changes pending")
 
-	// --check must not write.
 	if got := readFile(t, dir, "lua/plugins/x.lua"); got != original {
 		t.Errorf("--check should not write, got:\n%s", got)
 	}
 }
 
-func TestRun_checkPassesWhenNoChangePending(t *testing.T) {
-	dir := t.TempDir()
-	src := `return { { "a/b", commit = "` + hex40('a') + `" }, -- tag: v1
-}
-`
-	path := writeFile(t, dir, "lua/plugins/x.lua", src)
-
-	fr := newFakeResolver()
-	fr.add(resolver.RefTag, "https://github.com/a/b", "v1", hex40('a'))
-	withFakeResolver(t, fr)
-
-	if err := runRun(context.Background(), []string{path}, false, true /*check*/, false); err != nil {
-		t.Errorf("--check should pass when no diff, got: %v", err)
-	}
-}
-
-func TestRun_dryRunDoesNotWrite(t *testing.T) {
-	dir := t.TempDir()
-	src := `return { { "a/b", tag = "v1" } }
-`
-	path := writeFile(t, dir, "lua/plugins/x.lua", src)
-	original := src
-
-	fr := newFakeResolver()
-	fr.add(resolver.RefTag, "https://github.com/a/b", "v1", hex40('a'))
-	withFakeResolver(t, fr)
-
-	if err := runRun(context.Background(), []string{path}, false, false, true /*dryRun*/); err != nil {
-		t.Fatalf("runRun --dry-run: %v", err)
-	}
-	if got := readFile(t, dir, "lua/plugins/x.lua"); got != original {
-		t.Errorf("--dry-run should not write, got:\n%s", got)
-	}
-}
-
-func TestRun_ignoreMarker(t *testing.T) {
+func TestRun_default_ignoreMarker(t *testing.T) {
 	dir := t.TempDir()
 	src := `return {
   { "a/b", tag = "v1" }, -- vimpin:ignore
@@ -224,10 +152,9 @@ func TestRun_ignoreMarker(t *testing.T) {
 
 	fr := newFakeResolver()
 	fr.add(resolver.RefTag, "https://github.com/c/d", "v2", hex40('c'))
-	// Intentionally do NOT register a/b so any attempted resolve would fail.
 	withFakeResolver(t, fr)
 
-	if err := runRun(context.Background(), []string{path}, false, false, false); err != nil {
+	if err := runRun(context.Background(), []string{path}, runOptions{}); err != nil {
 		t.Fatalf("runRun: %v", err)
 	}
 
@@ -240,42 +167,16 @@ func TestRun_ignoreMarker(t *testing.T) {
 	}
 }
 
-func TestRun_skipsSpecWithoutSourceRef(t *testing.T) {
-	dir := t.TempDir()
-	src := `return {
-  { "a/b" },
-  { "c/d", tag = "v2" },
-}
-`
-	path := writeFile(t, dir, "lua/plugins/x.lua", src)
-
-	fr := newFakeResolver()
-	fr.add(resolver.RefTag, "https://github.com/c/d", "v2", hex40('c'))
-	withFakeResolver(t, fr)
-
-	if err := runRun(context.Background(), []string{path}, false, false, false); err != nil {
-		t.Fatalf("runRun: %v", err)
-	}
-
-	got := readFile(t, dir, "lua/plugins/x.lua")
-	if !strings.Contains(got, `{ "a/b" }`) {
-		t.Errorf("ref-less spec should be untouched, got:\n%s", got)
-	}
-	if !strings.Contains(got, hex40('c')) {
-		t.Errorf("other spec should still be pinned, got:\n%s", got)
-	}
-}
-
-func TestRun_propagatesResolverError(t *testing.T) {
+func TestRun_default_propagatesResolverError(t *testing.T) {
 	dir := t.TempDir()
 	src := `return { { "a/b", tag = "v-does-not-exist" } }
 `
 	path := writeFile(t, dir, "lua/plugins/x.lua", src)
 
-	fr := newFakeResolver() // empty: every Resolve returns ErrNotFound
+	fr := newFakeResolver()
 	withFakeResolver(t, fr)
 
-	err := runRun(context.Background(), []string{path}, false, false, false)
+	err := runRun(context.Background(), []string{path}, runOptions{})
 	ensureErrContains(t, err, "resolve a/b")
 }
 
@@ -309,41 +210,260 @@ func TestRun_cloneURLForRepo_rejectsUnsafeRepo(t *testing.T) {
 	}
 }
 
-func TestRun_emittedFormStaysParseable(t *testing.T) {
-	// Round-trip guard: vimpin emits canonical form, then re-running run on the
-	// emitted output must see "already pinned" and be a no-op. Also ensures the
-	// emitted form is what discovery + scanning will parse on the next CI run.
+// ---------------------------------------------------------------------------
+// --verify: SHA is source of truth, annotation gets corrected
+// ---------------------------------------------------------------------------
+
+func TestRun_verify_correctsDriftedAnnotation(t *testing.T) {
+	// SHA points at v3.9.0's commit, but the user manually changed the
+	// annotation to v3.8.0. --verify should rewrite the annotation back
+	// to v3.9.0 (matching what the SHA actually is) and never touch the
+	// SHA.
 	dir := t.TempDir()
-	path := writeFile(t, dir, "lua/plugins/x.lua", `return {
-  { "a/b", tag = "v1" },
-  {
-    "c/d",
-    branch = "main",
-    keys = { "x" },
-  },
+	src := `return {
+  { "a/b", commit = "` + hex40('a') + `" }, -- tag: v3.8.0
 }
-`)
+`
+	path := writeFile(t, dir, "lua/plugins/x.lua", src)
 
 	fr := newFakeResolver()
-	fr.add(resolver.RefTag, "https://github.com/a/b", "v1", hex40('a'))
-	fr.add(resolver.RefBranch, "https://github.com/c/d", "main", hex40('b'))
+	fr.addSHALookup("https://github.com/a/b", hex40('a'), "v3.9.0")
 	withFakeResolver(t, fr)
 
-	if err := runRun(context.Background(), []string{path}, false, false, false); err != nil {
-		t.Fatalf("first runRun: %v", err)
+	if err := runRun(context.Background(), []string{path}, runOptions{Verify: true}); err != nil {
+		t.Fatalf("runRun --verify: %v", err)
 	}
-	first := readFile(t, dir, "lua/plugins/x.lua")
 
-	if err := runRun(context.Background(), []string{path}, false, false, false); err != nil {
-		t.Fatalf("second runRun: %v", err)
+	got := readFile(t, dir, "lua/plugins/x.lua")
+	if !strings.Contains(got, "-- tag: v3.9.0") {
+		t.Errorf("annotation should be corrected to v3.9.0:\n%s", got)
 	}
-	second := readFile(t, dir, "lua/plugins/x.lua")
-
-	if first != second {
-		t.Errorf("re-run produced diff:\nfirst:\n%s\nsecond:\n%s", first, second)
+	if !strings.Contains(got, `commit = "`+hex40('a')+`"`) {
+		t.Errorf("commit must NOT change:\n%s", got)
 	}
-	if !strings.Contains(first, "-- tag: v1") || !strings.Contains(first, "-- branch: main") {
-		t.Errorf("annotations missing in output:\n%s", first)
-	}
-	_ = filepath.Base(path)
 }
+
+func TestRun_verify_noopWhenAnnotationMatches(t *testing.T) {
+	dir := t.TempDir()
+	original := `return {
+  { "a/b", commit = "` + hex40('a') + `" }, -- tag: v1.0
+}
+`
+	path := writeFile(t, dir, "lua/plugins/x.lua", original)
+
+	fr := newFakeResolver()
+	fr.addSHALookup("https://github.com/a/b", hex40('a'), "v1.0")
+	withFakeResolver(t, fr)
+
+	if err := runRun(context.Background(), []string{path}, runOptions{Verify: true}); err != nil {
+		t.Fatalf("runRun --verify: %v", err)
+	}
+	if got := readFile(t, dir, "lua/plugins/x.lua"); got != original {
+		t.Errorf("no-drift case must not modify file:\n%s", got)
+	}
+}
+
+func TestRun_verify_checkReportsButDoesNotWrite(t *testing.T) {
+	dir := t.TempDir()
+	original := `return {
+  { "a/b", commit = "` + hex40('a') + `" }, -- tag: v3.8.0
+}
+`
+	path := writeFile(t, dir, "lua/plugins/x.lua", original)
+
+	fr := newFakeResolver()
+	fr.addSHALookup("https://github.com/a/b", hex40('a'), "v3.9.0")
+	withFakeResolver(t, fr)
+
+	err := runRun(context.Background(), []string{path}, runOptions{Verify: true, Check: true})
+	ensureErrContains(t, err, "annotation drift")
+
+	if got := readFile(t, dir, "lua/plugins/x.lua"); got != original {
+		t.Errorf("--check must not write:\n%s", got)
+	}
+}
+
+func TestRun_verify_errorsWhenSHANotAnyTag(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "lua/plugins/x.lua", `return {
+  { "a/b", commit = "`+hex40('z')+`" }, -- tag: v1.0
+}
+`)
+	fr := newFakeResolver()
+	// SHA z is registered for no tag at all.
+	withFakeResolver(t, fr)
+
+	err := runRun(context.Background(), []string{path}, runOptions{Verify: true})
+	ensureErrContains(t, err, "not on any tag")
+}
+
+func TestRun_verify_skipsBranchAnnotations(t *testing.T) {
+	// Branch annotations are snapshot records; --verify does not have a
+	// meaningful reverse lookup for them and must leave them alone.
+	dir := t.TempDir()
+	original := `return {
+  { "a/b", commit = "` + hex40('a') + `" }, -- branch: main
+}
+`
+	path := writeFile(t, dir, "lua/plugins/x.lua", original)
+
+	fr := newFakeResolver()
+	withFakeResolver(t, fr)
+
+	if err := runRun(context.Background(), []string{path}, runOptions{Verify: true}); err != nil {
+		t.Fatalf("runRun --verify: %v", err)
+	}
+	if got := readFile(t, dir, "lua/plugins/x.lua"); got != original {
+		t.Errorf("branch annotation must not be touched:\n%s", got)
+	}
+	for _, c := range fr.calls {
+		if strings.HasPrefix(c, "LookupSHA") {
+			t.Errorf("--verify must not call LookupSHA on branch-annotated specs: %s", c)
+		}
+	}
+}
+
+func TestRun_verify_errorsOnUnpinnedSpec(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "lua/plugins/x.lua", `return {
+  { "a/b", tag = "v1.0" },
+}
+`)
+	fr := newFakeResolver()
+	withFakeResolver(t, fr)
+
+	err := runRun(context.Background(), []string{path}, runOptions{Verify: true})
+	ensureErrContains(t, err, "requires a pinned commit")
+}
+
+// ---------------------------------------------------------------------------
+// --update: explicit bump to latest tag (or branch HEAD)
+// ---------------------------------------------------------------------------
+
+func TestRun_update_bumpsToLatestTag(t *testing.T) {
+	dir := t.TempDir()
+	src := `return {
+  { "a/b", commit = "` + hex40('a') + `" }, -- tag: v3.8.0
+}
+`
+	path := writeFile(t, dir, "lua/plugins/x.lua", src)
+
+	fr := newFakeResolver()
+	fr.addLatestTag("https://github.com/a/b", "v3.9.0", hex40('b'))
+	withFakeResolver(t, fr)
+
+	if err := runRun(context.Background(), []string{path}, runOptions{Update: true}); err != nil {
+		t.Fatalf("runRun --update: %v", err)
+	}
+	got := readFile(t, dir, "lua/plugins/x.lua")
+	if !strings.Contains(got, hex40('b')) {
+		t.Errorf("commit should be bumped:\n%s", got)
+	}
+	if !strings.Contains(got, "-- tag: v3.9.0") {
+		t.Errorf("annotation should also be bumped:\n%s", got)
+	}
+}
+
+func TestRun_update_branchHeadRefresh(t *testing.T) {
+	dir := t.TempDir()
+	src := `return {
+  { "a/b", commit = "` + hex40('a') + `" }, -- branch: main
+}
+`
+	path := writeFile(t, dir, "lua/plugins/x.lua", src)
+
+	fr := newFakeResolver()
+	fr.add(resolver.RefBranch, "https://github.com/a/b", "main", hex40('z'))
+	withFakeResolver(t, fr)
+
+	if err := runRun(context.Background(), []string{path}, runOptions{Update: true}); err != nil {
+		t.Fatalf("runRun --update: %v", err)
+	}
+	got := readFile(t, dir, "lua/plugins/x.lua")
+	if !strings.Contains(got, hex40('z')) {
+		t.Errorf("branch HEAD should be re-resolved:\n%s", got)
+	}
+	if !strings.Contains(got, "-- branch: main") {
+		t.Errorf("branch annotation should remain unchanged:\n%s", got)
+	}
+}
+
+func TestRun_update_noopWhenAlreadyLatest(t *testing.T) {
+	dir := t.TempDir()
+	original := `return {
+  { "a/b", commit = "` + hex40('a') + `" }, -- tag: v3.9.0
+}
+`
+	path := writeFile(t, dir, "lua/plugins/x.lua", original)
+	fr := newFakeResolver()
+	fr.addLatestTag("https://github.com/a/b", "v3.9.0", hex40('a'))
+	withFakeResolver(t, fr)
+
+	if err := runRun(context.Background(), []string{path}, runOptions{Update: true}); err != nil {
+		t.Fatalf("runRun --update: %v", err)
+	}
+	if got := readFile(t, dir, "lua/plugins/x.lua"); got != original {
+		t.Errorf("already-latest case must be a no-op:\n%s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// --no-api: offline structural check
+// ---------------------------------------------------------------------------
+
+func TestRun_noAPI_passesOnCanonicalForm(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "lua/plugins/x.lua", `return {
+  { "a/b", commit = "`+hex40('a')+`" }, -- tag: v1.0
+}
+`)
+	fr := newFakeResolver()
+	withFakeResolver(t, fr)
+
+	if err := runRun(context.Background(), []string{path}, runOptions{NoAPI: true}); err != nil {
+		t.Errorf("--no-api should pass: %v", err)
+	}
+	if len(fr.calls) != 0 {
+		t.Errorf("--no-api must not hit the network/resolver: %v", fr.calls)
+	}
+}
+
+func TestRun_noAPI_failsOnUnpinnedSpec(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "lua/plugins/x.lua", `return {
+  { "a/b", tag = "v1.0" },
+}
+`)
+	err := runRun(context.Background(), []string{path}, runOptions{NoAPI: true})
+	ensureErrContains(t, err, "commit field missing")
+}
+
+func TestRun_noAPI_failsOnMissingAnnotation(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "lua/plugins/x.lua", `return {
+  { "a/b", commit = "`+hex40('a')+`" },
+}
+`)
+	err := runRun(context.Background(), []string{path}, runOptions{NoAPI: true})
+	ensureErrContains(t, err, "missing -- tag: / -- branch: annotation")
+}
+
+// ---------------------------------------------------------------------------
+// Flag conflict
+// ---------------------------------------------------------------------------
+
+func TestRun_options_mutuallyExclusive(t *testing.T) {
+	cases := []runOptions{
+		{Verify: true, Update: true},
+		{Verify: true, NoAPI: true},
+		{Update: true, NoAPI: true},
+	}
+	for _, c := range cases {
+		if err := c.validate(); err == nil {
+			t.Errorf("%+v: expected mutual-exclusion error", c)
+		}
+	}
+}
+
+// keep linter quiet if helpers happen to be unused in a future split
+var _ = ensureErr

@@ -64,10 +64,11 @@ jobs:
           mkdir -p smoke/lua/plugins
           cat > smoke/lua/plugins/spec.lua <<'LUA'
           return {
-            { "folke/which-key.nvim", branch = "main" },
+            { "folke/which-key.nvim", tag = "v3.9.0" },
           }
           LUA
           cd smoke
-          vimpin run --dry-run
-          vimpin run
-          vimpin verify --strict
+          vimpin run --check       # field-form -> would update, exit non-zero
+          vimpin run               # apply initial pin
+          vimpin run --no-api      # offline structural check
+          vimpin run --verify      # SHA -> annotation reverse check (no-op if pin matches)

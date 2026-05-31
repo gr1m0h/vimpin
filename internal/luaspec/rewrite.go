@@ -9,11 +9,19 @@ import (
 // Update describes a desired change to a single spec table. NewCommit is the
 // commit hash to write (must be 40-hex; the caller is responsible for that
 // invariant). RefType and RefValue go into the annotation comment.
+//
+// When CommentOnly is true, the commit field is left exactly as-is and only
+// the annotation comment is rewritten. This is used by `vimpin run --verify`
+// where the SHA is the source of truth and any drift between SHA and
+// annotation must be resolved by correcting the annotation, never by
+// re-resolving the SHA. NewCommit is ignored in this mode; the spec must
+// already carry a commit field for the edit to succeed.
 type Update struct {
-	Spec      Spec
-	NewCommit string
-	RefType   RefType
-	RefValue  string
+	Spec        Spec
+	NewCommit   string
+	RefType     RefType
+	RefValue    string
+	CommentOnly bool
 }
 
 // Apply rewrites src to incorporate updates. The rewriter performs the
@@ -55,11 +63,14 @@ type edit struct {
 
 func buildEdits(src []byte, u Update) ([]edit, error) {
 	s := u.Spec
-	if u.NewCommit == "" {
-		return nil, fmt.Errorf("%s: %s: NewCommit is empty", s.FilePath, s.Repo)
-	}
 	if u.RefType == RefNone || u.RefValue == "" {
 		return nil, fmt.Errorf("%s: %s: ref annotation is empty", s.FilePath, s.Repo)
+	}
+	if u.CommentOnly {
+		return buildCommentOnlyEdits(src, u)
+	}
+	if u.NewCommit == "" {
+		return nil, fmt.Errorf("%s: %s: NewCommit is empty", s.FilePath, s.Repo)
 	}
 
 	commitField, hasCommit := s.Field("commit")
@@ -161,6 +172,44 @@ func buildEdits(src []byte, u Update) ([]edit, error) {
 	}
 
 	return edits, nil
+}
+
+// buildCommentOnlyEdits produces edits that rewrite only the annotation
+// comment, leaving every named field (including commit) byte-for-byte
+// untouched. The spec must already be in canonical form (commit field
+// present and an existing annotation to replace, or a multi-line spec
+// with a commit field we can attach a new annotation to).
+func buildCommentOnlyEdits(src []byte, u Update) ([]edit, error) {
+	s := u.Spec
+	annot := fmt.Sprintf("-- %s: %s", u.RefType, u.RefValue)
+
+	// Existing annotation: replace in place.
+	if s.CommentRefType != RefNone {
+		return []edit{{
+			start: s.CommentStart,
+			end:   s.CommentEnd,
+			repl:  annot,
+		}}, nil
+	}
+
+	// No existing annotation: we need an anchor to insert one. Prefer the
+	// commit field. Without it (degenerate input) we have no canonical
+	// position, so reject.
+	commitField, hasCommit := s.Field("commit")
+	if !hasCommit {
+		return nil, fmt.Errorf("%s: %s: --verify needs an existing commit field", s.FilePath, s.Repo)
+	}
+	var insertAt int
+	if s.MultiLine {
+		insertAt = lineEnd(src, commitField.End)
+	} else {
+		insertAt = lineEnd(src, s.CloseBraceEnd)
+	}
+	return []edit{{
+		start: insertAt,
+		end:   insertAt,
+		repl:  " " + annot,
+	}}, nil
 }
 
 // removeFieldEdit returns an edit that deletes the given field cleanly. If

@@ -9,13 +9,12 @@ the original tag or branch. It pairs with [Renovate](https://docs.renovatebot.co
 through a ready-made preset so commit bumps land as reviewable pull requests
 instead of silent `:Lazy update` calls.
 
-The approach mirrors the commit-pinning pattern that has become standard
-for GitHub Actions workflows (e.g. [`pinact`](https://github.com/suzuki-shunsuke/pinact)),
-applied to the Lua spec files that Neovim plugin managers consume.
+The approach extends the commit-pinning pattern that has become standard
+for CI workflows to the Lua spec files that Neovim plugin managers consume.
 
-> **Status:** alpha, used by author. The CLI surface is small (`run`,
-> `verify`) and unlikely to change incompatibly; the supported Lua spec
-> shape may tighten as edge cases surface.
+> **Status:** alpha, used by author. The CLI surface is small (single `run`
+> subcommand with mode flags) and unlikely to change incompatibly; the
+> supported Lua spec shape may tighten as edge cases surface.
 
 > **Scope:** vimpin aims to support the major Vim/Neovim plugin managers
 > over time. **Currently only `lazy.nvim` Lua specs are supported.** packer.nvim,
@@ -101,32 +100,57 @@ Two invariants hold across both forms:
    upstream ref to track. The annotation must follow the commit value on a
    single line.
 
+## Source of truth
+
+The **commit SHA on disk is authoritative.** Once a spec is in canonical
+form, vimpin will never change the SHA unless you explicitly ask via
+`--update`. The annotation comment is a derived artefact: it records which
+tag (or branch) the SHA was taken from. If the annotation drifts (someone
+hand-edited it, or upstream rewrote a tag), `--verify` corrects the
+annotation to match the SHA, never the other way around.
+
+This is the foundation of vimpin's supply-chain story: the only path that
+moves an SHA forward is one the operator typed themselves.
+
 ## Commands
+
+vimpin exposes a single `run` subcommand whose mode is selected by flags.
 
 ```text
 vimpin run [PATHS...]
-  Resolve tag/branch refs to commits and rewrite specs in canonical form.
-  With no PATHS, scans the LazyVim default layout: lua/plugins/, lua/config/lazy.lua,
-  init.lua, plugin/.
+  Default: pin field-form (tag=/branch=) specs to canonical commit form.
+  Specs already in canonical form are a no-op. With no PATHS, scans the
+  LazyVim default layout: lua/plugins/, lua/config/lazy.lua, init.lua,
+  plugin/.
 
-  --refresh    Re-resolve commit values for already-pinned specs against the
-               current annotated ref (use after a quiet period to pick up
-               commits Renovate has not yet PR'd).
-  --check      Do not write; exit non-zero if any file would change (CI use).
-  --dry-run    Do not write; print the planned new file contents to stdout.
+  --verify    SHA is source of truth. Reverse-resolve each commit hash on
+              the remote, find the tag that points at it, and rewrite the
+              annotation comment to match. The commit field is never
+              touched. Use this to detect (and auto-correct) annotation
+              drift after a tag rewrite or a hand-edit. Branch-annotated
+              specs are left alone (a SHA can appear on many branches; no
+              meaningful reverse lookup exists).
 
-vimpin verify [PATHS...]
-  Check that every spec has a 40-hex commit value and a -- tag: / -- branch:
-  annotation. Exit code is non-zero if any check fails.
+  --update    Bump each spec to the latest semver tag (or, for branch-
+              annotated specs, the current branch HEAD). Both the commit
+              field and the annotation are updated atomically. This is
+              the ONLY mode that intentionally advances the commit SHA.
 
-  --strict     Additionally re-resolve each ref against the remote and report
-               drift (commit no longer matches the annotated tag/branch).
+  --no-api    Offline structural check. Asserts every spec has a 40-hex
+              commit field and a -- tag: / -- branch: annotation. No
+              network calls. Useful as a fast CI pre-check before the
+              network-bound --verify.
+
+  --check     Do not write. Exit non-zero if any file would change. Can
+              be combined with --verify or --update. Use this for CI.
 ```
+
+`--verify`, `--update`, and `--no-api` are mutually exclusive.
 
 ### `-- vimpin:ignore`
 
-Append `-- vimpin:ignore` to a spec to opt it out of `vimpin run` and
-`vimpin verify`:
+Append `-- vimpin:ignore` to a spec to opt it out of every `vimpin run`
+mode:
 
 ```lua
 { "internal/dev-plugin", dir = "~/code/plugin" }, -- vimpin:ignore
@@ -167,10 +191,15 @@ your repo's `renovate.json`:
 }
 ```
 
-Renovate then opens a PR each time the annotated tag or branch moves,
-updating both the commit hash and the annotation comment atomically. Because
-both halves change in the same PR, drift between them is structurally
+Renovate then opens a PR each time a newer tag is published, updating
+both the commit hash and the annotation comment atomically. Because both
+halves change in the same PR, drift between them is structurally
 impossible while Renovate is the sole updater.
+
+For branch-annotated specs, the preset's `git-refs` manager will also
+open digest-bump PRs as the branch HEAD moves. This is opt-in: the
+default preset enables it, but tag-only deployment is the recommended
+posture if you want the strictest SHA-as-source-of-truth discipline.
 
 See the preset's README for the layout constraints, recommended companion
 config (`dependencyDashboard`, `prConcurrentLimit`, `schedule`), and known
@@ -180,11 +209,12 @@ limits.
 
 ### Recommended: required check on every PR
 
-Treat `vimpin verify --strict` as a **required status check** on `main`. This
+Treat the read-only modes as **required status checks** on `main`. This
 catches three failure modes in one place:
 
 1. New specs that ship without a commit pin (`vimpin run` never ran).
-2. Pin annotations that no longer match their commit (upstream tag rewriting).
+2. Pin annotations that no longer match their commit (upstream tag rewriting
+   or hand-edits).
 3. Field-order violations that would silently break Renovate's regex.
 
 ```yaml
@@ -205,18 +235,20 @@ jobs:
         with:
           go-version: '1.24'
       - run: go install github.com/gr1m0h/vimpin/cmd/vimpin@latest
-      - run: vimpin run --check       # no rewrite required by this PR?
-      - run: vimpin verify --strict   # pins still match the remote?
+      - run: vimpin run --check                  # no rewrite required by this PR?
+      - run: vimpin run --no-api                 # offline structural check
+      - run: vimpin run --verify --check         # SHA <-> annotation aligned?
 ```
 
 Configure `main` branch protection so both `verify / vimpin` jobs are required
 before merge.
 
-### Refresh workflow (optional)
+### Update workflow (optional)
 
-A second workflow can run `vimpin run --refresh` via `workflow_dispatch` (or
-schedule) and open a PR with the resulting changes; pair with Renovate's
-`dependencyDashboard` so all pin movements stay reviewable.
+A second workflow can run `vimpin run --update` via `workflow_dispatch` (or
+schedule) to bump pinned specs to the latest semver tag, and open a PR with
+the resulting changes. Pair with Renovate's `dependencyDashboard` so all
+SHA-advancing operations remain reviewable.
 
 ### One-line usage with `vimpin-action`
 
@@ -231,7 +263,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: gr1m0h/vimpin-action@v1
         with:
-          mode: verify-strict     # or: run-check, run-refresh, ...
+          mode: verify     # or: check, no-api, update
 ```
 
 The action versions independently of the CLI, so its input surface can
@@ -290,7 +322,7 @@ The peer choices for keeping `lazy.nvim` plugin versions reproducible:
 |----------------------------------|-------------------|-----------------------|--------------------------------------------|
 | `lazy-lock.json` (lazy.nvim)     | Records only      | Last `:Lazy sync`     | `:Lazy update` moves everything            |
 | Hand-written `commit = "..."`    | Yes (commit pin)  | Lua spec              | Nothing automated; manual edits            |
-| `vimpin` + Renovate preset       | Yes (commit pin)  | Lua spec              | Renovate PRs against the pinned hash       |
+| `vimpin` + Renovate preset       | Yes (commit pin)  | **The SHA itself**    | Renovate PRs; `--update` to bump locally   |
 
 ## Testing
 
