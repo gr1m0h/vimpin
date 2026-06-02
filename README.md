@@ -9,10 +9,6 @@ the original tag or branch.
 The approach extends the commit-pinning pattern that has become standard
 for CI workflows to the Lua spec files that Neovim plugin managers consume.
 
-> **Status:** alpha, used by author. The CLI surface is small (single `run`
-> subcommand with mode flags) and unlikely to change incompatibly; the
-> supported Lua spec shape may tighten as edge cases surface.
-
 > **Scope:** vimpin aims to support the major Vim/Neovim plugin managers
 > over time. **Currently only `lazy.nvim` Lua specs are supported.**
 
@@ -244,7 +240,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e11487...3914f8d5 # v4
-      - uses: gr1m0h/vimpin-action@b0f298ab...ef902e04 # v0.0.1
+      - uses: gr1m0h/vimpin-action@b0f298ab...ef902e04 # v0.1.0
         with:
           mode: verify     # or: check, no-api, update
 ```
