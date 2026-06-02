@@ -214,8 +214,8 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@34e11487...3914f8d5 # v4
+      - uses: actions/setup-go@40f1582b...68e1baff # v5
         with:
           go-version: '1.24'
       - run: go install github.com/gr1m0h/vimpin/cmd/vimpin@latest
@@ -243,8 +243,8 @@ jobs:
   vimpin:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: gr1m0h/vimpin-action@v1
+      - uses: actions/checkout@34e11487...3914f8d5 # v4
+      - uses: gr1m0h/vimpin-action@b0f298ab...ef902e04 # v0.0.1
         with:
           mode: verify     # or: check, no-api, update
 ```
