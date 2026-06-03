@@ -32,9 +32,9 @@ go install github.com/gr1m0h/vimpin/cmd/vimpin@latest
 # Starting point: a normal lazy.nvim spec with a tag or branch hint
 cat > lua/plugins/example.lua <<'LUA'
 return {
-  { "ggandor/leap.nvim", tag = "v0.1.5" },
+  { "example/example.nvim", tag = "v0.1.5" },
   {
-    "folke/which-key.nvim",
+    "example/example.nvim",
     branch = "main",
     keys = { "<leader>" },
   },
@@ -47,10 +47,10 @@ vimpin run
 # Output: same file, now pinned and annotated
 cat lua/plugins/example.lua
 # return {
-#   { "ggandor/leap.nvim", commit = "8a40d3aa...07b9079b" }, -- tag: v0.1.5
+#   { "example/example.nvim", commit = "deadbeef...cafebabe" }, -- tag: v0.1.5
 #   {
-#     "folke/which-key.nvim",
-#     commit = "3aab2147...0a44c15a", -- branch: main
+#     "example/example.nvim",
+#     commit = "deadbeef...cafebabe", -- branch: main
 #     keys = { "<leader>" },
 #   },
 # }
