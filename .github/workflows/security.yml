@@ -9,6 +9,8 @@ permissions:
 jobs:
   govulncheck:
     uses: gr1m0h/.github/.github/workflows/govulncheck.yml@2cc0f9b53948603d8fcca30479882e30d26e71c8
+    with:
+      go-version: "1.25"
   osv-scan:
     uses: gr1m0h/.github/.github/workflows/osv-scanner.yml@2cc0f9b53948603d8fcca30479882e30d26e71c8
     permissions:
@@ -24,6 +26,8 @@ jobs:
       pull-requests: write
   codeql:
     uses: gr1m0h/.github/.github/workflows/codeql-go.yml@2cc0f9b53948603d8fcca30479882e30d26e71c8
+    with:
+      go-version: "1.25"
     permissions:
       contents: read
       security-events: write
