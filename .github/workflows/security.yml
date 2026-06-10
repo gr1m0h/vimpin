@@ -1,0 +1,36 @@
+# <target-repo>/.github/workflows/security.yml
+name: security
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    uses: gr1m0h/.github/.github/workflows/govulncheck.yml@2cc0f9b53948603d8fcca30479882e30d26e71c8
+    with:
+      go-version: "1.25"
+  osv-scan:
+    uses: gr1m0h/.github/.github/workflows/osv-scanner.yml@2cc0f9b53948603d8fcca30479882e30d26e71c8
+    permissions:
+      contents: read
+      security-events: write
+  gitleaks:
+    uses: gr1m0h/.github/.github/workflows/gitleaks.yml@2cc0f9b53948603d8fcca30479882e30d26e71c8
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    uses: gr1m0h/.github/.github/workflows/dependency-review.yml@2cc0f9b53948603d8fcca30479882e30d26e71c8
+    permissions:
+      contents: read
+      pull-requests: write
+  codeql:
+    uses: gr1m0h/.github/.github/workflows/codeql-go.yml@2cc0f9b53948603d8fcca30479882e30d26e71c8
+    with:
+      go-version: "1.25"
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+  actionlint:
+    uses: gr1m0h/.github/.github/workflows/actions-pin-lint.yml@2cc0f9b53948603d8fcca30479882e30d26e71c8
