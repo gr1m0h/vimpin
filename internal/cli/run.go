@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -456,10 +457,50 @@ func applyUpdates(f string, raw []byte, updates []luaspec.Update, check bool) (b
 		fmt.Fprintf(os.Stdout, "would update %s\n", f)
 		return true, nil
 	}
-	if err := os.WriteFile(f, out, 0o644); err != nil {
+	if err := writeFileAtomic(f, out); err != nil {
 		return false, fmt.Errorf("write %s: %w", f, err)
 	}
 	return true, nil
+}
+
+// writeFileAtomic replaces f's contents with data without ever leaving a
+// partially written file behind: it writes to a temp file in the same
+// directory, fsyncs it, then renames it over f (atomic on POSIX). vimpin
+// edits files that live in the user's version-controlled config, so a
+// process killed mid-write must never truncate or corrupt the original.
+//
+// The original file's permission bits are preserved; a brand-new file
+// (no existing mode to inherit) falls back to 0644.
+func writeFileAtomic(f string, data []byte) error {
+	perm := os.FileMode(0o644)
+	if info, err := os.Stat(f); err == nil {
+		perm = info.Mode().Perm()
+	}
+
+	dir := filepath.Dir(f)
+	tmp, err := os.CreateTemp(dir, ".vimpin-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	// Best-effort cleanup if we bail out before the rename succeeds.
+	defer func() { _ = os.Remove(tmpName) }()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, f)
 }
 
 func resolverRefType(rt luaspec.RefType) resolver.RefType {
