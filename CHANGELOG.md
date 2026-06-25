@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.1.2](https://github.com/gr1m0h/vimpin/compare/v0.1.1...v0.1.2) - 2026-06-25
+
+- chore: sync baseline files from gr1m0h/.github by @gr1m0h-baseline[bot] in https://github.com/gr1m0h/vimpin/pull/17
+
 ## [v0.1.1](https://github.com/gr1m0h/vimpin/compare/v0.1.0...v0.1.1) - 2026-06-24
 
 - chore: sync baseline files from gr1m0h/.github by @gr1m0h-baseline[bot] in https://github.com/gr1m0h/vimpin/pull/11
