@@ -1,10 +1,10 @@
 module github.com/gr1m0h/vimpin
 
-go 1.25.8
+go 1.26.0
 
 require (
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/mod v0.21.0
+	golang.org/x/mod v0.41.0
 )
 
 require (
